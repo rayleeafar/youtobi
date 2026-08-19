@@ -16,7 +16,8 @@ from services.bilibili import BilibiliService
 class TestYoutobi(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
-        self.client.post("/api/auth/login", json={"password": "admin"})
+        pwd = config_manager.get("admin_password", "admin")
+        self.client.post("/api/auth/login", json={"password": pwd})
 
 
     def test_config_update_skip_subtitles(self):
@@ -34,12 +35,13 @@ class TestYoutobi(unittest.TestCase):
         res = unauth_client.get("/api/config")
         self.assertEqual(res.status_code, 401)
 
+        admin_pwd = config_manager.get("admin_password", "admin")
         # Login with bad password
-        bad_res = unauth_client.post("/api/auth/login", json={"password": "wrong"})
+        bad_res = unauth_client.post("/api/auth/login", json={"password": "wrong_password_invalid"})
         self.assertEqual(bad_res.status_code, 400)
 
         # Login with correct password
-        good_res = unauth_client.post("/api/auth/login", json={"password": "admin"})
+        good_res = unauth_client.post("/api/auth/login", json={"password": admin_pwd})
         self.assertEqual(good_res.status_code, 200)
         self.assertTrue(good_res.json().get("success"))
 
