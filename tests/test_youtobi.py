@@ -173,26 +173,31 @@ Second subtitle line
 
     def test_bilibili_video_splitter(self):
         from services.bilibili import BilibiliService
-        from unittest.mock import patch
+        from unittest.mock import patch, MagicMock
+        import tempfile
 
-        dummy_path = Path("/tmp/dummy_long_video.mp4")
-        # Under max limit (e.g. 5 hours = 18000s) -> returns single path
-        with patch.object(BilibiliService, "get_video_duration", return_value=18000.0):
-            parts = BilibiliService.split_video_if_needed(dummy_path, max_duration_sec=28800)
-            self.assertEqual(len(parts), 1)
-            self.assertEqual(parts[0], dummy_path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dummy_path = Path(tmpdir) / "dummy_long_video.mp4"
+            dummy_path.write_bytes(b"dummy")
 
-        # Over max limit (e.g. 10.5 hours = 37800s) -> splits into 2 parts
-        import stat
-        with patch.object(BilibiliService, "get_video_duration", return_value=37800.0), \
-             patch("subprocess.run") as mock_sub, \
-             patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "stat") as mock_stat:
-            mock_stat.return_value.st_size = 1000
-            mock_stat.return_value.st_mode = stat.S_IFREG | 0o644
-            mock_sub.return_value.returncode = 0
-            parts = BilibiliService.split_video_if_needed(dummy_path, max_duration_sec=28800)
-            self.assertEqual(len(parts), 2)
+            # Under max limit (e.g. 5 hours = 18000s) -> returns single path
+            with patch.object(BilibiliService, "get_video_duration", return_value=18000.0):
+                parts = BilibiliService.split_video_if_needed(dummy_path, max_duration_sec=28800)
+                self.assertEqual(len(parts), 1)
+                self.assertEqual(parts[0], dummy_path)
+
+            # Over max limit (e.g. 10.5 hours = 37800s) -> splits into 2 parts
+            def fake_subprocess_run(cmd, *args, **kwargs):
+                out_path = Path(cmd[-1])
+                out_path.write_bytes(b"x" * 2000000)
+                res = MagicMock()
+                res.returncode = 0
+                return res
+
+            with patch.object(BilibiliService, "get_video_duration", return_value=37800.0), \
+                 patch("subprocess.run", side_effect=fake_subprocess_run):
+                parts = BilibiliService.split_video_if_needed(dummy_path, max_duration_sec=28800)
+                self.assertEqual(len(parts), 2)
 
     def test_auto_delete_after_upload(self):
 
