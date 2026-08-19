@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 - youtobi 自动化发布平台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body style="display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg-dark);">
+  <div style="width: 100%; max-width: 420px; padding: 2rem; background: var(--card-bg); border: 1px solid var(--panel-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-glow); text-align: center;">
+    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🎬</div>
+    <h2 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-main);">youtobi 管理后台</h2>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem;">请输入管理员密码以进入控制面板</p>
+
+    <form id="loginForm">
+      <div class="form-group" style="text-align: left; margin-bottom: 1.25rem;">
+        <label for="password" style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">管理员密码 Admin Password</label>
+        <input type="password" id="password" class="input-field" placeholder="默认密码: admin" required style="width: 100%; margin-top: 6px;">
+      </div>
+      <div id="loginError" style="display: none; color: #ff5252; font-size: 0.85rem; margin-bottom: 1rem; font-weight: 500;"></div>
+      <button type="submit" id="loginBtn" class="btn btn-primary" style="width: 100%; padding: 0.75rem; font-size: 1rem;">🔓 登录 Login</button>
+    </form>
+  </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pwd = document.getElementById('password').value;
+      const btn = document.getElementById('loginBtn');
+      const errDiv = document.getElementById('loginError');
+      errDiv.style.display = 'none';
+      btn.disabled = true;
+      btn.innerText = '正在验证...';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pwd })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          window.location.href = '/';
+        } else {
+          errDiv.innerText = data.detail || data.message || '密码错误，请重试';
+          errDiv.style.display = 'block';
+        }
+      } catch (err) {
+        errDiv.innerText = '登录请求失败: ' + err.message;
+        errDiv.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '🔓 登录 Login';
+      }
+    });
+  </script>
+</body>
+</html>

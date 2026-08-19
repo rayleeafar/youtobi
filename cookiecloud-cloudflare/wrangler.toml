@@ -1,0 +1,9 @@
+name = "cookiecloud-cloudflare"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Cloudflare KV Namespace Binding
+# Run `npx wrangler kv:namespace create COOKIE_STORE` and paste your kv namespace id below
+[[kv_namespaces]]
+binding = "COOKIE_STORE"
+id = "YOUR_KV_NAMESPACE_ID"

@@ -1,0 +1,347 @@
+import unittest
+import json
+from pathlib import Path
+from fastapi.testclient import TestClient
+
+from app import app
+from config import config_manager
+from services.youtube import YouTubeService
+from services.subtitle import SubtitleService
+from services.llm import LLMService
+from services.cookiecloud import CookieCloudService
+from services.task_manager import task_manager
+from services.bilibili import BilibiliService
+
+
+class TestYoutobi(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+        self.client.post("/api/auth/login", json={"password": "admin"})
+
+
+    def test_config_update_skip_subtitles(self):
+        res = self.client.post("/api/config", json={"skip_subtitles": True, "auto_delete_after_upload": True})
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["config"]["skip_subtitles"])
+        self.assertTrue(res.json()["config"]["auto_delete_after_upload"])
+
+        get_res = self.client.get("/api/config")
+        self.assertEqual(get_res.status_code, 200)
+        self.assertTrue(get_res.json()["config"]["skip_subtitles"])
+
+    def test_auth_flow(self):
+        unauth_client = TestClient(app)
+        res = unauth_client.get("/api/config")
+        self.assertEqual(res.status_code, 401)
+
+        # Login with bad password
+        bad_res = unauth_client.post("/api/auth/login", json={"password": "wrong"})
+        self.assertEqual(bad_res.status_code, 400)
+
+        # Login with correct password
+        good_res = unauth_client.post("/api/auth/login", json={"password": "admin"})
+        self.assertEqual(good_res.status_code, 200)
+        self.assertTrue(good_res.json().get("success"))
+
+        # Access config with auth
+        conf_res = unauth_client.get("/api/config")
+        self.assertEqual(conf_res.status_code, 200)
+
+
+    def test_config_downloads_dir_fallback(self):
+        from config import ConfigManager, BASE_DIR
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json") as tmp:
+            tmp_path = Path(tmp.name)
+            cm = ConfigManager(file_path=tmp_path)
+            cm.set("downloads_dir", "/invalid_nonexistent_root_dir_12345/downloads")
+            cfg = cm.load()
+            self.assertEqual(cfg["downloads_dir"], str(BASE_DIR / "downloads"))
+
+
+
+    def test_task_creation_validation(self):
+        # Empty URL test
+        res = self.client.post("/api/tasks", json={"youtube_url": ""})
+        self.assertEqual(res.status_code, 400)
+
+        # Invalid domain test
+        res = self.client.post("/api/tasks", json={"youtube_url": "https://example.com"})
+        self.assertEqual(res.status_code, 400)
+
+    def test_youtube_extract_items_with_custom_text(self):
+        input_text = """https://www.youtube.com/watch?v=video1
+# 侯府嫡女重生记 第一季
+https://youtu.be/video2 # 第二个视频备注
+"""
+        items = YouTubeService.extract_items(input_text)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["url"], "https://www.youtube.com/watch?v=video1")
+        self.assertEqual(items[0]["custom_text"], "侯府嫡女重生记 第一季")
+        self.assertEqual(items[1]["url"], "https://youtu.be/video2")
+        self.assertEqual(items[1]["custom_text"], "第二个视频备注")
+
+
+
+
+    def test_llm_fallback(self):
+        cfg = {"llm_enabled": False, "llm_api_key": ""}
+        llm = LLMService(cfg)
+        res = llm.regenerate_description("Test Title", "Test Description", "en")
+        self.assertEqual(res["title"], "Test Title")
+        self.assertEqual(res["description"], "Test Description")
+        self.assertFalse(res["used_llm"])
+
+    def test_llm_retry_and_fallback(self):
+        from unittest.mock import patch, MagicMock
+
+        cfg = {"llm_enabled": True, "llm_api_key": "sk-fake", "llm_model": "gpt-4o-mini"}
+        llm = LLMService(cfg)
+
+        logs = []
+        def mock_logger(msg):
+            logs.append(msg)
+
+        # Case 1: Fails 3 times -> Fallback to native title & description
+        with patch("openai.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.chat.completions.create.side_effect = Exception("API connection error")
+
+            res = llm.regenerate_description("Native Title", "Native Description", "en", max_retries=3, task_logger=mock_logger)
+            self.assertEqual(res["title"], "Native Title")
+            self.assertEqual(res["description"], "Native Description")
+            self.assertFalse(res["used_llm"])
+            self.assertEqual(mock_client.chat.completions.create.call_count, 3)
+            self.assertTrue(any("Falling back to native source description" in l for l in logs))
+
+    def test_vtt_to_srt_conversion(self):
+        sub_service = SubtitleService()
+        vtt = """WEBVTT
+
+00:00:01.000 --> 00:00:05.000
+Hello world
+
+00:00:05.500 --> 00:00:09.000
+Second subtitle line
+"""
+        srt = sub_service.vtt_to_srt(vtt)
+        self.assertIn("00:00:01,000 --> 00:00:05,000", srt)
+        self.assertIn("Hello world", srt)
+
+    def test_whisper_srt_formatting(self):
+        segments = [
+            {"start": 1.25, "end": 4.5, "text": "Hello Whisper"},
+            {"start": 5.0, "end": 8.123, "text": "Second line"}
+        ]
+        srt = SubtitleService.format_segments_to_srt(segments)
+        self.assertIn("1\n00:00:01,250 --> 00:00:04,500\nHello Whisper", srt)
+        self.assertIn("2\n00:00:05,000 --> 00:00:08,123\nSecond line", srt)
+
+    def test_subtitle_processing_logic(self):
+        import tempfile
+        from unittest.mock import patch, MagicMock
+
+        sub_service = SubtitleService()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            video_file = tmp_path / "test.mp4"
+            video_file.write_bytes(b"fake video content")
+
+            srt_file = tmp_path / "test.srt"
+            srt_file.write_text("1\n00:00:01,000 --> 00:00:02,000\n中文测试", encoding="utf-8")
+
+            # Case 1: Chinese video WITH external subtitles -> should return original video without burn-in
+            out_video, out_srt = sub_service.process_subtitles(video_file, srt_file, is_chinese=True, output_dir=tmp_path / "out1")
+            self.assertEqual(out_video, video_file)
+
+            # Case 2: Chinese video WITH embedded subtitles -> should return original video without burn-in
+            with patch.object(sub_service, "has_embedded_subtitles", return_value=True):
+                out_video, out_srt = sub_service.process_subtitles(video_file, None, is_chinese=True, output_dir=tmp_path / "out2")
+                self.assertEqual(out_video, video_file)
+
+            # Case 3: Non-Chinese video -> should process & burn subtitles
+            dummy_cn_srt = tmp_path / "chinese.srt"
+            dummy_cn_srt.write_text("1\n00:00:01,000 --> 00:00:02,000\n字幕", encoding="utf-8")
+            with patch.object(sub_service, "_ensure_chinese_srt", return_value=dummy_cn_srt), \
+                 patch.object(sub_service, "burn_subtitles", return_value=tmp_path / "burned_test.mp4") as mock_burn:
+                out_video, out_srt = sub_service.process_subtitles(video_file, srt_file, is_chinese=False, output_dir=tmp_path / "out3")
+                mock_burn.assert_called_once()
+                self.assertEqual(out_video, tmp_path / "burned_test.mp4")
+
+    def test_bilibili_video_splitter(self):
+        from services.bilibili import BilibiliService
+        from unittest.mock import patch
+
+        dummy_path = Path("/tmp/dummy_long_video.mp4")
+        # Under max limit (e.g. 5 hours = 18000s) -> returns single path
+        with patch.object(BilibiliService, "get_video_duration", return_value=18000.0):
+            parts = BilibiliService.split_video_if_needed(dummy_path, max_duration_sec=28800)
+            self.assertEqual(len(parts), 1)
+            self.assertEqual(parts[0], dummy_path)
+
+        # Over max limit (e.g. 10.5 hours = 37800s) -> splits into 2 parts
+        with patch.object(BilibiliService, "get_video_duration", return_value=37800.0), \
+             patch("subprocess.run") as mock_sub, \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "stat") as mock_stat:
+            mock_stat.return_value.st_size = 1000
+            mock_sub.return_value.returncode = 0
+            parts = BilibiliService.split_video_if_needed(dummy_path, max_duration_sec=28800)
+            self.assertEqual(len(parts), 2)
+
+    def test_auto_delete_after_upload(self):
+
+        from unittest.mock import patch, MagicMock
+        from services.task_manager import Task
+
+        task = Task("test1234", "https://youtu.be/test")
+        task_manager.tasks[task.id] = task
+
+        # Mock dependencies in pipeline
+        dummy_info = {"title": "Test Title", "description": "Test Desc", "language": "zh", "is_chinese": True}
+        with patch("services.task_manager.YouTubeService") as mock_yt_cls, \
+             patch("services.task_manager.SubtitleService") as mock_sub_cls, \
+             patch("services.task_manager.LLMService") as mock_llm_cls, \
+             patch("services.task_manager.BilibiliService") as mock_bili_cls:
+
+            mock_yt = mock_yt_cls.return_value
+            mock_yt.extract_info.return_value = dummy_info
+
+            # Create dummy task directory and dummy video file
+            cfg = config_manager.all()
+            task_dir = Path(cfg["downloads_dir"]) / task.id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            dummy_video = task_dir / "test1234.mp4"
+            dummy_video.write_bytes(b"dummy video data")
+            
+            mock_yt.download_video_and_subtitles.return_value = (dummy_video, None, dummy_info)
+
+            mock_sub = mock_sub_cls.return_value
+            mock_sub.process_subtitles.return_value = (dummy_video, None)
+
+            mock_llm = mock_llm_cls.return_value
+            mock_llm.regenerate_description.return_value = {"title": "Test Title", "description": "Test Desc", "used_llm": False}
+
+            mock_bili = mock_bili_cls.return_value
+            mock_bili.upload_video.return_value = {"bvid": "BV1234567890"}
+
+            # Run pipeline
+            task_manager._run_task_pipeline(task)
+
+            # Verify task history is preserved
+            self.assertEqual(task.status, "COMPLETED")
+            self.assertEqual(task.bvid, "BV1234567890")
+            self.assertEqual(task.final_title, "Test Title")
+            self.assertTrue(any("Auto-deleted local video files" in log for log in task.logs))
+
+            # Verify video file directory on disk was auto-deleted
+            self.assertFalse(task_dir.exists())
+
+
+    def test_task_lifecycle_api(self):
+        from unittest.mock import patch
+        with patch.object(task_manager, "_run_task_pipeline", return_value=None):
+            res = self.client.post("/api/tasks", json={"youtube_url": "https://www.youtube.com/watch?v=demo12345", "skip_subtitles": True})
+            self.assertEqual(res.status_code, 200)
+            task_id = res.json()["task"]["id"]
+            self.assertTrue(res.json()["task"]["skip_subtitles"])
+
+            # Stop task
+            stop_res = self.client.post(f"/api/tasks/{task_id}/stop")
+            self.assertEqual(stop_res.status_code, 200)
+            self.assertEqual(task_manager.get_task(task_id).status, "PAUSED")
+
+            # Start task
+            start_res = self.client.post(f"/api/tasks/{task_id}/start")
+            self.assertEqual(start_res.status_code, 200)
+
+            # Toggle skip subtitles
+            skip_res = self.client.post(f"/api/tasks/{task_id}/skip_subtitles", json={"skip": False})
+            self.assertEqual(skip_res.status_code, 200)
+            self.assertFalse(task_manager.get_task(task_id).skip_subtitles)
+
+            # Cancel task
+            c_res = self.client.post(f"/api/tasks/{task_id}/cancel")
+            self.assertEqual(c_res.status_code, 200)
+
+            # Retry task
+            r_res = self.client.post(f"/api/tasks/{task_id}/retry")
+            self.assertEqual(r_res.status_code, 200)
+
+            # Delete task
+            d_res = self.client.delete(f"/api/tasks/{task_id}")
+            self.assertEqual(d_res.status_code, 200)
+
+    def test_task_persistence_across_reboot(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from services.task_manager import TaskManager
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_tasks_file = Path(tmpdir) / "tasks.json"
+            with patch.object(TaskManager, "_run_task_pipeline", return_value=None):
+                tm1 = TaskManager(file_path=tmp_tasks_file)
+                t1 = tm1.create_task("https://www.youtube.com/watch?v=persisted123", skip_subtitles=True)
+                t1.status = "COMPLETED"
+                t1.bvid = "BV_PERSIST_TEST"
+                tm1.save_tasks()
+
+                # Simulate reboot by instantiating new TaskManager
+                tm2 = TaskManager(file_path=tmp_tasks_file)
+                self.assertIn(t1.id, tm2.tasks)
+                reloaded_task = tm2.get_task(t1.id)
+                self.assertEqual(reloaded_task.bvid, "BV_PERSIST_TEST")
+                self.assertEqual(reloaded_task.status, "COMPLETED")
+                self.assertTrue(reloaded_task.skip_subtitles)
+
+
+    def test_cookiecloud_decryption_legacy_and_fixed(self):
+        import base64, hashlib
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import pad
+        
+        uuid = "test-uuid"
+        password = "test-pass"
+        service = CookieCloudService("http://dummy", uuid, password)
+
+        # 1. Test Fixed IV Mode
+        key_bytes = hashlib.md5(f"{uuid}-{password}".encode("utf-8")).hexdigest()[:16].encode("utf-8")
+        payload = json.dumps({"cookie_data": {".bilibili.com": [{"name": "SESSDATA", "value": "val123"}]}}).encode("utf-8")
+        cipher_fixed = AES.new(key_bytes, AES.MODE_CBC, b"\x00" * 16)
+        ct_fixed = cipher_fixed.encrypt(pad(payload, 16))
+        b64_fixed = base64.b64encode(ct_fixed).decode("utf-8")
+        
+        dec_fixed = service._decrypt(b64_fixed)
+        self.assertIn("SESSDATA", dec_fixed)
+
+        # 2. Test Legacy OpenSSL Mode (Salted__ header)
+        salt = b"12345678"
+        k, iv = service._evp_bytes_to_key(key_bytes, salt, 32, 16)
+        cipher_legacy = AES.new(k, AES.MODE_CBC, iv)
+        ct_legacy = cipher_legacy.encrypt(pad(payload, 16))
+        b64_legacy = base64.b64encode(b"Salted__" + salt + ct_legacy).decode("utf-8")
+
+        dec_legacy = service._decrypt(b64_legacy)
+        self.assertIn("SESSDATA", dec_legacy)
+
+    def test_llm_models_and_test_routes(self):
+        from unittest.mock import patch
+        with patch.object(LLMService, "fetch_models", return_value=["gpt-4o", "gpt-4o-mini"]):
+            res = self.client.post("/api/llm/models", json={"llm_api_key": "sk-test", "llm_base_url": "https://api.openai.com/v1"})
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data.get("success"))
+            self.assertEqual(data.get("models"), ["gpt-4o", "gpt-4o-mini"])
+
+        with patch.object(LLMService, "test_connection", return_value={"success": True, "latency_ms": 120, "reply": "Hi", "model": "gpt-4o-mini"}):
+            res = self.client.post("/api/llm/test", json={"llm_api_key": "sk-test", "llm_model": "gpt-4o-mini"})
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data.get("success"))
+            self.assertIn("连接成功", data.get("message"))
+
+if __name__ == "__main__":
+
+    unittest.main()

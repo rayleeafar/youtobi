@@ -1,0 +1,75 @@
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# Node.js & Cloudflare Workers
+node_modules/
+.wrangler/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Project Runtime Data & User Config
+config.json
+tasks.json
+downloads/
+*.log
+app.log
+
+# Third-party Reference Clones
+docs/refers/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Operating System & Editor Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

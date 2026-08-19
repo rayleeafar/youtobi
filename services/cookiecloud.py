@@ -1,0 +1,199 @@
+import base64
+import hashlib
+import json
+import logging
+from typing import Dict, Any, Optional, Tuple, List
+
+import requests
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+
+logger = logging.getLogger("youtobi.cookiecloud")
+
+class CookieCloudService:
+    def __init__(self, server_url: str, uuid: str, password: str):
+        self.server_url = server_url.rstrip("/") if server_url else ""
+        self.uuid = uuid.strip() if uuid else ""
+        self.password = password.strip() if password else ""
+
+    @staticmethod
+    def _evp_bytes_to_key(passphrase: bytes, salt: bytes, key_len: int = 32, iv_len: int = 16) -> Tuple[bytes, bytes]:
+        """Derives key and IV using OpenSSL's EVP_BytesToKey algorithm (used by CryptoJS legacy mode)."""
+        d = b""
+        d_i = b""
+        while len(d) < (key_len + iv_len):
+            d_i = hashlib.md5(d_i + passphrase + salt).digest()
+            d += d_i
+        return d[:key_len], d[key_len:key_len + iv_len]
+
+    def _decrypt(self, encrypted_b64: str, crypto_type: str = "legacy") -> str:
+        """
+        Decrypts base64 encoded AES encrypted payload using multiple format strategies:
+        1. OpenSSL EVP_BytesToKey (CryptoJS legacy mode with 'Salted__' header)
+        2. Standard AES-128-CBC with fixed zero IV
+        3. Legacy key-as-IV mode
+        """
+        try:
+            raw = base64.b64decode(encrypted_b64)
+        except Exception as e:
+            raise ValueError(f"Base64 数据解码失败: {e}")
+
+        # Derived key candidates (with and without hyphen for compatibility)
+        passphrase_hyphen = hashlib.md5(f"{self.uuid}-{self.password}".encode("utf-8")).hexdigest()[:16].encode("utf-8")
+        passphrase_nohyphen = hashlib.md5(f"{self.uuid}{self.password}".encode("utf-8")).hexdigest()[:16].encode("utf-8")
+        raw_passphrase_hyphen = f"{self.uuid}-{self.password}".encode("utf-8")
+        raw_passphrase_nohyphen = f"{self.uuid}{self.password}".encode("utf-8")
+
+        candidates: List[Tuple[bytes, bytes, bytes]] = []
+
+        # Strategy A: OpenSSL / CryptoJS Legacy Mode (Salted__ header)
+        if raw[:8] == b"Salted__":
+            salt = raw[8:16]
+            ct = raw[16:]
+            for pass_bytes in [passphrase_hyphen, passphrase_nohyphen, raw_passphrase_hyphen, raw_passphrase_nohyphen]:
+                for key_len in [32, 16]:
+                    key, iv = self._evp_bytes_to_key(pass_bytes, salt, key_len, 16)
+                    candidates.append((key, iv, ct))
+
+        # Strategy B: Fixed Zero IV Mode (aes-128-cbc-fixed)
+        fixed_iv = b"\x00" * 16
+        for pass_bytes in [passphrase_hyphen, passphrase_nohyphen]:
+            candidates.append((pass_bytes, fixed_iv, raw))
+
+        # Strategy C: Direct Key-as-IV Mode
+        for pass_bytes in [passphrase_hyphen, passphrase_nohyphen]:
+            candidates.append((pass_bytes, pass_bytes, raw))
+
+        last_err = None
+        for key, iv, ct in candidates:
+            try:
+                cipher = AES.new(key, AES.MODE_CBC, iv)
+                decrypted_padded = cipher.decrypt(ct)
+                decrypted_bytes = unpad(decrypted_padded, AES.block_size)
+                decoded_str = decrypted_bytes.decode("utf-8")
+                # Check for valid JSON structure
+                if decoded_str.strip().startswith("{") or decoded_str.strip().startswith("["):
+                    return decoded_str
+            except Exception as e:
+                last_err = e
+
+        raise ValueError(f"Padding is incorrect (解密密码错误或算法不匹配: {last_err})")
+
+
+    @staticmethod
+    def _extract_all_cookie_items(cookie_data: Any) -> List[Dict[str, Any]]:
+        """Normalizes CookieCloud cookie_data into a flat list of cookie items."""
+        items: List[Dict[str, Any]] = []
+        if isinstance(cookie_data, dict):
+            for domain, cookies in cookie_data.items():
+                if isinstance(cookies, list):
+                    for c in cookies:
+                        if isinstance(c, dict):
+                            item = c.copy()
+                            if not item.get("domain"):
+                                item["domain"] = domain
+                            items.append(item)
+                elif isinstance(cookies, dict):
+                    item = cookies.copy()
+                    if not item.get("domain"):
+                        item["domain"] = domain
+                    items.append(item)
+        elif isinstance(cookie_data, list):
+            for c in cookie_data:
+                if isinstance(c, dict):
+                    items.append(c)
+        return items
+
+    @classmethod
+    def _to_netscape_cookies(cls, cookie_data_root: Any) -> str:
+        """Converts youtube.com and google.com cookies from CookieCloud payload to Netscape cookies.txt format."""
+        all_cookies = cls._extract_all_cookie_items(cookie_data_root)
+        lines = ["# Netscape HTTP Cookie File", "# https://curl.se/docs/http-cookies.html", "# Generated by CookieCloud sync", ""]
+        has_yt_cookies = False
+
+        for c in all_cookies:
+            dom = str(c.get("domain", "")).strip()
+            name = str(c.get("name", "")).strip()
+            value = str(c.get("value", "")).strip()
+            
+            if not name or not value:
+                continue
+
+            dom_lower = dom.lower()
+            if any(target in dom_lower for target in ["youtube.com", "youtube", "google.com", "google"]):
+                has_yt_cookies = True
+                include_sub = "TRUE" if dom.startswith(".") else "FALSE"
+                path = c.get("path", "/")
+                secure = "TRUE" if c.get("secure", True) else "FALSE"
+                try:
+                    expiration = str(int(c.get("expirationDate") or c.get("expiry") or 2147483647))
+                except Exception:
+                    expiration = "2147483647"
+                lines.append(f"{dom}\t{include_sub}\t{path}\t{secure}\t{expiration}\t{name}\t{value}")
+
+        return "\n".join(lines) if has_yt_cookies else ""
+
+    def fetch_all_synced_cookies(self) -> Tuple[Dict[str, str], str]:
+        """
+        Fetches synced cookies from CookieCloud server.
+        Returns (bilibili_cookies_dict, youtube_netscape_cookies_str)
+        """
+        if not self.server_url or not self.uuid or not self.password:
+            raise ValueError("CookieCloud 服务器地址、UUID 或 密码未配置。")
+
+        get_url = f"{self.server_url}/get/{self.uuid}"
+        try:
+            response = requests.get(get_url, timeout=10)
+        except Exception as e:
+            raise ValueError(f"无法连接到 CookieCloud 服务器 ({self.server_url}): {e}")
+
+        if response.status_code == 404:
+            raise ValueError(f"CookieCloud 未找到 UUID '{self.uuid}' 的数据，请确保浏览器插件已成功同步。")
+        elif response.status_code != 200:
+            raise ValueError(f"CookieCloud 服务器返回错误 ({response.status_code}): {response.text[:200]}")
+
+        data = response.json()
+        encrypted_data = data.get("encrypted")
+        crypto_type = data.get("crypto_type", "legacy")
+
+        if not encrypted_data:
+            raise ValueError("CookieCloud 响应数据格式错误 (缺少 'encrypted' 字段)。")
+
+        try:
+            decrypted_json_str = self._decrypt(encrypted_data, crypto_type)
+        except Exception as e:
+            raise ValueError(f"CookieCloud 解密失败，请检查加密密码是否与浏览器插件设置一致。错误: {e}")
+
+        try:
+            cookie_json = json.loads(decrypted_json_str)
+        except Exception as e:
+            raise ValueError(f"解密数据 JSON 解析失败: {e}")
+
+        cookie_data_root = cookie_json.get("cookie_data") or cookie_json.get("cookies") or cookie_json
+        all_cookies = self._extract_all_cookie_items(cookie_data_root)
+
+        # 1. Extract Bilibili cookies
+        bilibili_cookies: Dict[str, str] = {}
+        for c in all_cookies:
+            dom = str(c.get("domain", "")).lower()
+            if "bilibili.com" in dom or "bilibili" in dom:
+                name = c.get("name")
+                value = c.get("value")
+                if name and value:
+                    bilibili_cookies[name] = str(value)
+
+        if "SESSDATA" not in bilibili_cookies:
+            logger.warning("No SESSDATA cookie found for bilibili.com in CookieCloud sync.")
+
+        # 2. Extract YouTube Netscape cookies
+        youtube_netscape = self._to_netscape_cookies(cookie_data_root)
+
+        return bilibili_cookies, youtube_netscape
+
+
+    def fetch_bilibili_cookies(self) -> Dict[str, str]:
+        """Backwards compatible alias for fetch_all_synced_cookies returning only bilibili dict."""
+        bili_cookies, _ = self.fetch_all_synced_cookies()
+        return bili_cookies
+
+
