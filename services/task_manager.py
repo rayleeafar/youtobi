@@ -236,12 +236,66 @@ class TaskManager:
     def list_tasks(self) -> List[Dict[str, Any]]:
         return [t.to_dict() for t in sorted(self.tasks.values(), key=lambda x: x.created_at, reverse=True)]
 
-    def _run_task_pipeline(self, task: Task):
+    def _sync_cookiecloud(self, task: Optional[Task] = None) -> Tuple[Dict[str, str], Optional[str]]:
+        """Sync fresh cookies from CookieCloud if configured and update config_manager."""
         cfg = config_manager.all()
-        downloads_dir = Path(cfg.get("downloads_dir", "./downloads"))
+        url = str(cfg.get("cookiecloud_url") or "").strip()
+        uuid_val = str(cfg.get("cookiecloud_uuid") or "").strip()
+        password = str(cfg.get("cookiecloud_password") or "").strip()
+
+        if not url or not uuid_val or not password:
+            return {}, None
 
         try:
+            if task:
+                task.log("Syncing fresh cookies from CookieCloud before downloading from YouTube...")
+            else:
+                logger.info("Syncing fresh cookies from CookieCloud...")
+
+            cc_service = CookieCloudService(url, uuid_val, password)
+            bili_cookies, yt_netscape = cc_service.fetch_all_synced_cookies()
+            update_dict = {}
+
+            if yt_netscape:
+                update_dict["youtube_cookies"] = yt_netscape
+                if task:
+                    task.log("Successfully synced fresh YouTube cookies from CookieCloud!")
+                else:
+                    logger.info("Successfully synced fresh YouTube cookies from CookieCloud!")
+
+            if bili_cookies:
+                if bili_cookies.get("SESSDATA"):
+                    update_dict["bilibili_sessdata"] = bili_cookies.get("SESSDATA")
+                if bili_cookies.get("bili_jct"):
+                    update_dict["bilibili_bili_jct"] = bili_cookies.get("bili_jct")
+                if bili_cookies.get("DedeUserID"):
+                    update_dict["bilibili_dedeuserid"] = bili_cookies.get("DedeUserID")
+                if task:
+                    task.log("Successfully synced fresh Bilibili cookies from CookieCloud!")
+                else:
+                    logger.info("Successfully synced fresh Bilibili cookies from CookieCloud!")
+
+            if update_dict:
+                config_manager.update(update_dict)
+
+            return bili_cookies, yt_netscape
+        except Exception as e:
+            msg = f"CookieCloud cookie sync warning: {e}"
+            if task:
+                task.log(msg)
+            else:
+                logger.warning(msg)
+            return {}, None
+
+    def _run_task_pipeline(self, task: Task):
+        try:
             task.log(f"Starting pipeline for YouTube URL: {task.youtube_url}")
+
+            # Step 0: Sync CookieCloud cookies before downloading from YouTube
+            synced_bili_cookies, _ = self._sync_cookiecloud(task=task)
+
+            cfg = config_manager.all()
+            downloads_dir = Path(cfg.get("downloads_dir", "./downloads"))
             
             # Step 1: YouTube Extract & Download
             task.status = "DOWNLOADING"
@@ -336,30 +390,20 @@ class TaskManager:
             task.progress = 85
             task.log("Initiating Bilibili upload service...")
             
-            # Sync CookieCloud if configured
+            # Sync CookieCloud if configured and not already fetched
+            cfg = config_manager.all()
             sessdata = cfg.get("bilibili_sessdata", "")
             bili_jct = cfg.get("bilibili_bili_jct", "")
             dedeuserid = cfg.get("bilibili_dedeuserid", "")
 
-            if cfg.get("cookiecloud_url") and cfg.get("cookiecloud_uuid") and cfg.get("cookiecloud_password"):
-                try:
-                    task.log("Syncing fresh cookies from CookieCloud...")
-                    cc_service = CookieCloudService(
-                        cfg.get("cookiecloud_url"),
-                        cfg.get("cookiecloud_uuid"),
-                        cfg.get("cookiecloud_password")
-                    )
-                    synced = cc_service.fetch_bilibili_cookies()
-                    if synced.get("SESSDATA"):
-                        sessdata = synced.get("SESSDATA", sessdata)
-                        bili_jct = synced.get("bili_jct", bili_jct)
-                        dedeuserid = synced.get("DedeUserID", dedeuserid)
-                        task.log("Successfully updated Bilibili cookies from CookieCloud!")
-                except Exception as e:
-                    task.log(f"CookieCloud sync warning: {e}")
+            if not synced_bili_cookies and cfg.get("cookiecloud_url") and cfg.get("cookiecloud_uuid") and cfg.get("cookiecloud_password"):
+                synced_bili_cookies, _ = self._sync_cookiecloud(task=task)
+                cfg = config_manager.all()
+                sessdata = cfg.get("bilibili_sessdata", sessdata)
+                bili_jct = cfg.get("bilibili_bili_jct", bili_jct)
+                dedeuserid = cfg.get("bilibili_dedeuserid", dedeuserid)
 
-            synced_cookies = synced if 'synced' in locals() else {}
-            bili_service = BilibiliService(sessdata, bili_jct, dedeuserid, extra_cookies=synced_cookies)
+            bili_service = BilibiliService(sessdata, bili_jct, dedeuserid, extra_cookies=synced_bili_cookies or {})
             
             def upload_progress(pct: int, msg: str):
                 task.progress = 85 + int(pct * 0.15)

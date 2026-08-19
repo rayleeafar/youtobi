@@ -83,8 +83,8 @@ class YouTubeService:
         if not cookies_val:
             return None
         
-        # If cookies_val contains newlines or is long, treat directly as Netscape cookies text content
-        if "\n" in cookies_val or len(cookies_val) > 250:
+        # If cookies_val contains newlines, tabs, Netscape header or is long, treat directly as Netscape cookies text content
+        if "\n" in cookies_val or "\t" in cookies_val or "Netscape" in cookies_val or len(cookies_val) > 250:
             temp_cookie_path = self.downloads_dir / "yt_cookies.txt"
             try:
                 temp_cookie_path.write_text(cookies_val, encoding="utf-8")

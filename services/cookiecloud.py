@@ -123,10 +123,11 @@ class CookieCloudService:
             if any(target in dom_lower for target in ["youtube.com", "youtube", "google.com", "google"]):
                 has_yt_cookies = True
                 include_sub = "TRUE" if dom.startswith(".") else "FALSE"
-                path = c.get("path", "/")
+                path = c.get("path") or "/"
                 secure = "TRUE" if c.get("secure", True) else "FALSE"
                 try:
-                    expiration = str(int(c.get("expirationDate") or c.get("expiry") or 2147483647))
+                    exp_raw = c.get("expirationDate") or c.get("expiry")
+                    expiration = str(int(float(exp_raw))) if exp_raw is not None else "2147483647"
                 except Exception:
                     expiration = "2147483647"
                 lines.append(f"{dom}\t{include_sub}\t{path}\t{secure}\t{expiration}\t{name}\t{value}")

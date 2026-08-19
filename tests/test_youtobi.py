@@ -342,6 +342,63 @@ Second subtitle line
             self.assertTrue(data.get("success"))
             self.assertIn("连接成功", data.get("message"))
 
-if __name__ == "__main__":
+    def test_cookiecloud_sync_before_youtube_download(self):
+        from unittest.mock import patch, MagicMock
+        from services.task_manager import Task
 
+        # Set up CookieCloud configs
+        config_manager.update({
+            "cookiecloud_url": "https://cc.example.com",
+            "cookiecloud_uuid": "uuid-123",
+            "cookiecloud_password": "pwd-123",
+            "youtube_cookies": "old_yt_cookie",
+            "bilibili_sessdata": "old_sess"
+        })
+
+        task = Task("test_cc_sync", "https://youtu.be/sync_test")
+        task_manager.tasks[task.id] = task
+
+        dummy_yt_cookie = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2147483647\tLOGIN_INFO\tnew_token"
+        dummy_bili_cookies = {"SESSDATA": "new_sessdata_val", "bili_jct": "new_jct_val", "DedeUserID": "9999"}
+
+        with patch("services.task_manager.CookieCloudService") as mock_cc_cls, \
+             patch("services.task_manager.YouTubeService") as mock_yt_cls, \
+             patch("services.task_manager.SubtitleService") as mock_sub_cls, \
+             patch("services.task_manager.LLMService") as mock_llm_cls, \
+             patch("services.task_manager.BilibiliService") as mock_bili_cls:
+
+            mock_cc = mock_cc_cls.return_value
+            mock_cc.fetch_all_synced_cookies.return_value = (dummy_bili_cookies, dummy_yt_cookie)
+
+            mock_yt = mock_yt_cls.return_value
+            mock_yt.extract_info.return_value = {"title": "Sync Test", "description": "Desc", "language": "zh", "is_chinese": True}
+            
+            cfg = config_manager.all()
+            task_dir = Path(cfg["downloads_dir"]) / task.id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            dummy_video = task_dir / "sync_test.mp4"
+            dummy_video.write_bytes(b"dummy")
+            mock_yt.download_video_and_subtitles.return_value = (dummy_video, None, {})
+
+            mock_sub = mock_sub_cls.return_value
+            mock_sub.process_subtitles.return_value = (dummy_video, None)
+
+            mock_llm = mock_llm_cls.return_value
+            mock_llm.regenerate_description.return_value = {"title": "Sync Test", "description": "Desc", "used_llm": False}
+
+            mock_bili = mock_bili_cls.return_value
+            mock_bili.upload_video.return_value = {"bvid": "BV_SYNC_OK"}
+
+            # Run pipeline
+            task_manager._run_task_pipeline(task)
+
+            # Verify CookieCloud was fetched
+            mock_cc.fetch_all_synced_cookies.assert_called_once()
+            self.assertEqual(config_manager.get("youtube_cookies"), dummy_yt_cookie)
+            self.assertEqual(config_manager.get("bilibili_sessdata"), "new_sessdata_val")
+            self.assertTrue(any("Syncing fresh cookies from CookieCloud before downloading from YouTube" in log for log in task.logs))
+            self.assertTrue(any("Successfully synced fresh YouTube cookies from CookieCloud" in log for log in task.logs))
+            self.assertEqual(task.status, "COMPLETED")
+
+if __name__ == "__main__":
     unittest.main()
