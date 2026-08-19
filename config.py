@@ -44,6 +44,25 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Admin Security Settings
     "admin_password": "admin",
 
+    # Upload Targets Configuration (list of "bilibili", "youtube")
+    "upload_targets": ["bilibili"],
+
+    # YouTube Upload (Data API v3) Configuration
+    "youtube_upload_enabled": False,
+    "youtube_client_id": "",
+    "youtube_client_secret": "",
+    "youtube_refresh_token": "",
+    "youtube_privacy_status": "unlisted",  # public / unlisted / private
+    "youtube_category_id": "22",  # 22 = People & Blogs, 24 = Entertainment, 27 = Education
+
+    # Video Secondary Creation Engine Settings
+    "secondary_creation_enabled": False,
+    "secondary_flip_horizontal": False,
+    "secondary_border_ratio": 0.0,  # 0.0 to 0.20 (percentage black padding)
+    "secondary_watermark_enabled": False,
+    "secondary_watermark_text": "",
+    "secondary_watermark_opacity": 0.012,
+
     # Output Settings
     "downloads_dir": str(DOWNLOADS_DIR),
     "auto_delete_after_upload": True,

@@ -1,7 +1,7 @@
 import os
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -104,6 +104,19 @@ class ConfigUpdateRequest(BaseModel):
     youtube_cookies: Optional[str] = None
     auto_delete_after_upload: Optional[bool] = None
     skip_subtitles: Optional[bool] = None
+    upload_targets: Optional[List[str]] = None
+    youtube_upload_enabled: Optional[bool] = None
+    youtube_client_id: Optional[str] = None
+    youtube_client_secret: Optional[str] = None
+    youtube_refresh_token: Optional[str] = None
+    youtube_privacy_status: Optional[str] = None
+    youtube_category_id: Optional[str] = None
+    secondary_creation_enabled: Optional[bool] = None
+    secondary_flip_horizontal: Optional[bool] = None
+    secondary_border_ratio: Optional[float] = None
+    secondary_watermark_enabled: Optional[bool] = None
+    secondary_watermark_text: Optional[str] = None
+    secondary_watermark_opacity: Optional[float] = None
 
 
 from services.youtube import YouTubeService
@@ -245,6 +258,16 @@ async def get_config():
     safe_cfg["has_llm_api_key"] = bool(raw_llm_key)
     safe_cfg["llm_api_key_masked"] = raw_llm_key[:4] + "...." + raw_llm_key[-4:] if len(raw_llm_key) > 8 else ("****" if raw_llm_key else "")
     safe_cfg["llm_api_key"] = ""
+
+    raw_yt_secret = str(safe_cfg.get("youtube_client_secret") or "").strip()
+    safe_cfg["has_youtube_client_secret"] = bool(raw_yt_secret)
+    safe_cfg["youtube_client_secret_masked"] = raw_yt_secret[:3] + "...." + raw_yt_secret[-3:] if len(raw_yt_secret) > 6 else ("****" if raw_yt_secret else "")
+    safe_cfg["youtube_client_secret"] = ""
+
+    raw_yt_token = str(safe_cfg.get("youtube_refresh_token") or "").strip()
+    safe_cfg["has_youtube_refresh_token"] = bool(raw_yt_token)
+    safe_cfg["youtube_refresh_token_masked"] = raw_yt_token[:4] + "...." + raw_yt_token[-4:] if len(raw_yt_token) > 8 else ("****" if raw_yt_token else "")
+    safe_cfg["youtube_refresh_token"] = ""
     return {"success": True, "config": safe_cfg}
 
 @app.post("/api/config")
@@ -255,10 +278,25 @@ async def update_config(req: ConfigUpdateRequest):
     if "llm_api_key" in update_data:
         new_key = str(update_data["llm_api_key"]).strip()
         if ("...." in new_key or "****" in new_key or not new_key) and current_key:
-            # User left field empty or submitted masked string, retain existing real key
             update_data.pop("llm_api_key")
         else:
             update_data["llm_api_key"] = new_key
+
+    current_yt_secret = str(config_manager.get("youtube_client_secret", "") or "").strip()
+    if "youtube_client_secret" in update_data:
+        new_secret = str(update_data["youtube_client_secret"]).strip()
+        if ("...." in new_secret or "****" in new_secret or not new_secret) and current_yt_secret:
+            update_data.pop("youtube_client_secret")
+        else:
+            update_data["youtube_client_secret"] = new_secret
+
+    current_yt_token = str(config_manager.get("youtube_refresh_token", "") or "").strip()
+    if "youtube_refresh_token" in update_data:
+        new_token = str(update_data["youtube_refresh_token"]).strip()
+        if ("...." in new_token or "****" in new_token or not new_token) and current_yt_token:
+            update_data.pop("youtube_refresh_token")
+        else:
+            update_data["youtube_refresh_token"] = new_token
 
     config_manager.update(update_data)
     

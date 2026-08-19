@@ -19,6 +19,21 @@
   "whisper_model": "whisper-1",
   "youtube_cookies": "",
   "admin_password": "admin",
+  "upload_targets": [
+    "bilibili"
+  ],
+  "youtube_upload_enabled": false,
+  "youtube_client_id": "",
+  "youtube_client_secret": "",
+  "youtube_refresh_token": "",
+  "youtube_privacy_status": "unlisted",
+  "youtube_category_id": "22",
+  "secondary_creation_enabled": false,
+  "secondary_flip_horizontal": false,
+  "secondary_border_ratio": 0.0,
+  "secondary_watermark_enabled": false,
+  "secondary_watermark_text": "",
+  "secondary_watermark_opacity": 0.012,
   "downloads_dir": "./downloads",
   "auto_delete_after_upload": true,
   "skip_subtitles": false

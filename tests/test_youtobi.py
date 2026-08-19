@@ -30,6 +30,33 @@ class TestYoutobi(unittest.TestCase):
         self.assertEqual(get_res.status_code, 200)
         self.assertTrue(get_res.json()["config"]["skip_subtitles"])
 
+    def test_config_new_fields_defaults(self):
+        cfg = config_manager.all()
+        self.assertIn("upload_targets", cfg)
+        self.assertIn("youtube_upload_enabled", cfg)
+        self.assertIn("youtube_privacy_status", cfg)
+        self.assertIn("secondary_creation_enabled", cfg)
+        self.assertIn("secondary_flip_horizontal", cfg)
+        self.assertIn("secondary_border_ratio", cfg)
+        self.assertIn("secondary_watermark_enabled", cfg)
+
+        # Test updating new fields
+        res = self.client.post("/api/config", json={
+            "upload_targets": ["bilibili", "youtube"],
+            "youtube_upload_enabled": True,
+            "secondary_creation_enabled": True,
+            "secondary_flip_horizontal": True,
+            "secondary_border_ratio": 0.05,
+            "secondary_watermark_enabled": True,
+            "secondary_watermark_text": "MY_WATERMARK"
+        })
+        self.assertEqual(res.status_code, 200)
+        updated = res.json()["config"]
+        self.assertEqual(updated["upload_targets"], ["bilibili", "youtube"])
+        self.assertTrue(updated["secondary_flip_horizontal"])
+        self.assertEqual(updated["secondary_border_ratio"], 0.05)
+        self.assertEqual(updated["secondary_watermark_text"], "MY_WATERMARK")
+
     def test_auth_flow(self):
         unauth_client = TestClient(app)
         res = unauth_client.get("/api/config")
