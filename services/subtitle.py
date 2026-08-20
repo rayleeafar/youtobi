@@ -48,6 +48,50 @@ class SubtitleService:
             logger.error(f"Error extracting embedded subtitles: {e}")
         return None
 
+    def prepare_chinese_srt(
+        self,
+        video_path: Path,
+        sub_path: Optional[Path],
+        is_chinese: bool,
+        output_dir: Path
+    ) -> Tuple[Optional[Path], bool]:
+        """
+        Determines and prepares Chinese SRT:
+        Returns (chinese_srt_path, needs_burn_in)
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        target_srt = output_dir / "chinese_subtitles.srt"
+
+        has_ext_sub = bool(sub_path and sub_path.exists() and sub_path.stat().st_size > 0)
+        has_embedded_sub = self.has_embedded_subtitles(video_path)
+        has_any_sub = has_ext_sub or has_embedded_sub
+
+        if is_chinese and has_any_sub:
+            logger.info("Video is already in Chinese and has subtitles (external or embedded). No burn-in required.")
+            return (sub_path if (sub_path and sub_path.exists()) else None), False
+
+        cn_srt_path = None
+        effective_sub_path = sub_path if (sub_path and sub_path.exists()) else None
+
+        if not effective_sub_path and has_embedded_sub:
+            logger.info("Extracting embedded subtitle stream from video...")
+            extracted_sub = output_dir / "embedded_sub.srt"
+            if self.extract_embedded_subtitles(video_path, extracted_sub):
+                effective_sub_path = extracted_sub
+
+        if effective_sub_path and effective_sub_path.exists():
+            cn_srt_path = self._ensure_chinese_srt(effective_sub_path, target_srt)
+        else:
+            logger.info("No subtitle file or embedded subtitle stream found. Generating Chinese SRT from audio transcription...")
+            cn_srt_path = self._generate_chinese_srt_from_audio(video_path, target_srt)
+
+        if not cn_srt_path or not cn_srt_path.exists() or cn_srt_path.stat().st_size == 0:
+            logger.warning("Could not generate Chinese SRT.")
+            return None, False
+
+        return cn_srt_path, True
+
     def process_subtitles(
         self,
         video_path: Path,
@@ -68,39 +112,13 @@ class SubtitleService:
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
         target_video = output_dir / f"burned_{video_path.name}"
-        target_srt = output_dir / "chinese_subtitles.srt"
 
-        has_ext_sub = bool(sub_path and sub_path.exists() and sub_path.stat().st_size > 0)
-        has_embedded_sub = self.has_embedded_subtitles(video_path)
-        has_any_sub = has_ext_sub or has_embedded_sub
+        cn_srt_path, needs_burn = self.prepare_chinese_srt(video_path, sub_path, is_chinese, output_dir)
+        if not needs_burn or not cn_srt_path:
+            return video_path, cn_srt_path
 
-        if is_chinese and has_any_sub:
-            logger.info("Video is already in Chinese and has subtitles (external or embedded). Uploading directly without burning subtitles.")
-            return video_path, sub_path if (sub_path and sub_path.exists()) else None
-
-        # 1. Obtain Chinese SRT file
-        cn_srt_path = None
-        effective_sub_path = sub_path if (sub_path and sub_path.exists()) else None
-
-        if not effective_sub_path and has_embedded_sub:
-            logger.info("Extracting embedded subtitle stream from video...")
-            extracted_sub = output_dir / "embedded_sub.srt"
-            if self.extract_embedded_subtitles(video_path, extracted_sub):
-                effective_sub_path = extracted_sub
-
-        if effective_sub_path and effective_sub_path.exists():
-            cn_srt_path = self._ensure_chinese_srt(effective_sub_path, target_srt)
-        else:
-            logger.info("No subtitle file or embedded subtitle stream found. Generating Chinese SRT from audio transcription...")
-            cn_srt_path = self._generate_chinese_srt_from_audio(video_path, target_srt)
-
-        if not cn_srt_path or not cn_srt_path.exists() or cn_srt_path.stat().st_size == 0:
-            logger.warning("Could not generate Chinese SRT. Returning original video.")
-            return video_path, None
-
-        # 2. Burn subtitles into video using ffmpeg
+        # Burn subtitles into video using ffmpeg
         logger.info(f"Burning Chinese subtitles from {cn_srt_path} into video {video_path}...")
         burned_video = self.burn_subtitles(video_path, cn_srt_path, target_video)
         return burned_video, cn_srt_path

@@ -605,5 +605,50 @@ Second subtitle line
                 self.assertTrue(len(progresses) > 0)
                 self.assertEqual(progresses[-1][0], 100)
 
+    def test_task_manager_dual_upload_orchestration(self):
+        from services.task_manager import Task, TaskManager
+        from unittest.mock import patch, MagicMock
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_tasks_file = Path(tmpdir) / "tasks.json"
+            mgr = TaskManager(file_path=tmp_tasks_file)
+
+            # 1. Test Task serialization with dual upload & secondary options
+            task = Task(
+                task_id="t123",
+                youtube_url="https://youtube.com/watch?v=abc12345",
+                upload_targets=["bilibili", "youtube"],
+                secondary_creation={"flip_horizontal": True, "border_ratio": 0.05, "watermark_text": "TEST_WM", "watermark_enabled": True}
+            )
+            d = task.to_dict()
+            self.assertEqual(d["upload_targets"], ["bilibili", "youtube"])
+            self.assertTrue(d["secondary_creation"]["flip_horizontal"])
+            self.assertEqual(d["secondary_creation"]["watermark_text"], "TEST_WM")
+
+            rebuilt = Task.from_dict(d)
+            self.assertEqual(rebuilt.upload_targets, ["bilibili", "youtube"])
+            self.assertEqual(rebuilt.secondary_creation["border_ratio"], 0.05)
+
+            # 2. Test Pipeline Execution with Dual Upload
+            fake_vid = Path(tmpdir) / "fake_input.mp4"
+            fake_vid.write_bytes(b"dummy_video_data")
+            fake_sub = Path(tmpdir) / "fake_sub.srt"
+            fake_sub.write_text("1\n00:00:00,000 --> 00:00:05,000\nHello world\n", encoding="utf-8")
+
+            with patch("services.youtube.YouTubeService.extract_info", return_value={"title": "YT Video", "description": "Desc", "language": "en", "is_chinese": False}), \
+                 patch("services.youtube.YouTubeService.download_video_and_subtitles", return_value=(fake_vid, fake_sub, {})), \
+                 patch("services.video_editor.VideoEditor.process_video", return_value=fake_vid) as mock_editor, \
+                 patch("services.bilibili.BilibiliService.upload_video", return_value={"bvid": "BV1DUAL_BILI"}), \
+                 patch("services.youtube_uploader.YouTubeUploaderService.upload_video", return_value={"video_id": "YT_DUAL_123", "url": "https://www.youtube.com/watch?v=YT_DUAL_123"}):
+                
+                mgr._run_task_pipeline(task)
+
+                self.assertEqual(task.status, "COMPLETED")
+                self.assertEqual(task.bvid, "BV1DUAL_BILI")
+                self.assertEqual(task.youtube_video_id, "YT_DUAL_123")
+                self.assertEqual(task.youtube_watch_url, "https://www.youtube.com/watch?v=YT_DUAL_123")
+                self.assertTrue(mock_editor.called)
+
 if __name__ == "__main__":
     unittest.main()

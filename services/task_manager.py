@@ -15,16 +15,28 @@ from services.subtitle import SubtitleService
 from services.llm import LLMService
 from services.bilibili import BilibiliService
 from services.cookiecloud import CookieCloudService
+from services.video_editor import VideoEditor
+from services.youtube_uploader import YouTubeUploaderService
 
 logger = logging.getLogger("youtobi.task_manager")
 TASKS_FILE = BASE_DIR / "tasks.json"
 
 class Task:
-    def __init__(self, task_id: str, youtube_url: str, custom_text: Optional[str] = None, skip_subtitles: bool = False):
+    def __init__(
+        self,
+        task_id: str,
+        youtube_url: str,
+        custom_text: Optional[str] = None,
+        skip_subtitles: bool = False,
+        upload_targets: Optional[List[str]] = None,
+        secondary_creation: Optional[Dict[str, Any]] = None
+    ):
         self.id = task_id
         self.youtube_url = youtube_url
         self.custom_text = custom_text
         self.skip_subtitles = skip_subtitles
+        self.upload_targets = upload_targets if upload_targets is not None else ["bilibili"]
+        self.secondary_creation = secondary_creation or {}
         self.status = "PENDING"  # PENDING, DOWNLOADING, SUBTITLE_PROCESSING, LLM_REGENERATION, UPLOADING, COMPLETED, FAILED, PAUSED
         self.progress = 0
         self.logs: List[str] = []
@@ -41,6 +53,8 @@ class Task:
         self.final_tags: List[str] = []
         self.used_llm: bool = False
         self.bvid: Optional[str] = None
+        self.youtube_video_id: Optional[str] = None
+        self.youtube_watch_url: Optional[str] = None
         self.cancelled: bool = False
 
     def log(self, message: str):
@@ -58,6 +72,8 @@ class Task:
             "youtube_url": self.youtube_url,
             "custom_text": self.custom_text,
             "skip_subtitles": self.skip_subtitles,
+            "upload_targets": self.upload_targets,
+            "secondary_creation": self.secondary_creation,
             "status": self.status,
             "progress": self.progress,
             "logs": self.logs,
@@ -70,6 +86,8 @@ class Task:
             "final_tags": self.final_tags,
             "used_llm": self.used_llm,
             "bvid": self.bvid,
+            "youtube_video_id": self.youtube_video_id,
+            "youtube_watch_url": self.youtube_watch_url,
             "cancelled": self.cancelled,
         }
 
@@ -79,7 +97,9 @@ class Task:
             task_id=data["id"],
             youtube_url=data["youtube_url"],
             custom_text=data.get("custom_text"),
-            skip_subtitles=data.get("skip_subtitles", False)
+            skip_subtitles=data.get("skip_subtitles", False),
+            upload_targets=data.get("upload_targets", ["bilibili"]),
+            secondary_creation=data.get("secondary_creation", {})
         )
         task.status = data.get("status", "PENDING")
         task.progress = data.get("progress", 0)
@@ -95,6 +115,8 @@ class Task:
         task.final_tags = data.get("final_tags", [])
         task.used_llm = data.get("used_llm", False)
         task.bvid = data.get("bvid")
+        task.youtube_video_id = data.get("youtube_video_id")
+        task.youtube_watch_url = data.get("youtube_watch_url")
         task.cancelled = data.get("cancelled", False)
 
         return task
@@ -129,9 +151,36 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error saving tasks to {self.file_path}: {e}")
 
-    def create_task(self, youtube_url: str, custom_text: Optional[str] = None, skip_subtitles: bool = False) -> Task:
+    def create_task(
+        self,
+        youtube_url: str,
+        custom_text: Optional[str] = None,
+        skip_subtitles: bool = False,
+        upload_targets: Optional[List[str]] = None,
+        secondary_creation: Optional[Dict[str, Any]] = None
+    ) -> Task:
+        cfg = config_manager.all()
+        if upload_targets is None:
+            upload_targets = cfg.get("upload_targets", ["bilibili"])
+        if secondary_creation is None:
+            secondary_creation = {
+                "enabled": cfg.get("secondary_creation_enabled", False),
+                "flip_horizontal": cfg.get("secondary_flip_horizontal", False),
+                "border_ratio": cfg.get("secondary_border_ratio", 0.0),
+                "watermark_enabled": cfg.get("secondary_watermark_enabled", False),
+                "watermark_text": cfg.get("secondary_watermark_text", ""),
+                "watermark_opacity": cfg.get("secondary_watermark_opacity", 0.012)
+            }
+
         task_id = str(uuid.uuid4())[:8]
-        task = Task(task_id, youtube_url, custom_text, skip_subtitles=skip_subtitles)
+        task = Task(
+            task_id=task_id,
+            youtube_url=youtube_url,
+            custom_text=custom_text,
+            skip_subtitles=skip_subtitles,
+            upload_targets=upload_targets,
+            secondary_creation=secondary_creation
+        )
         task._manager = self
         self.tasks[task_id] = task
         self.save_tasks()
@@ -141,13 +190,27 @@ class TaskManager:
         thread.start()
         return task
 
-    def create_batch_tasks(self, items: List[Dict[str, Optional[str]]], skip_subtitles: bool = False) -> List[Task]:
+    def create_batch_tasks(
+        self,
+        items: List[Dict[str, Any]],
+        skip_subtitles: bool = False,
+        upload_targets: Optional[List[str]] = None,
+        secondary_creation: Optional[Dict[str, Any]] = None
+    ) -> List[Task]:
         created = []
         for item in items:
             url = item.get("url")
             custom = item.get("custom_text")
+            item_targets = item.get("upload_targets", upload_targets)
+            item_sec = item.get("secondary_creation", secondary_creation)
             if url:
-                task = self.create_task(url, custom_text=custom, skip_subtitles=skip_subtitles)
+                task = self.create_task(
+                    youtube_url=url,
+                    custom_text=custom,
+                    skip_subtitles=skip_subtitles,
+                    upload_targets=item_targets,
+                    secondary_creation=item_sec
+                )
                 created.append(task)
         return created
 
@@ -316,36 +379,73 @@ class TaskManager:
                 task.log("Pipeline stopped due to cancellation.")
                 return
 
-            # Step 2: Subtitle Processing & Burn-in
+            # Step 2: Subtitle Processing & Secondary Video Transformation
             task.status = "SUBTITLE_PROCESSING"
             task.progress = 40
             llm_service = LLMService(cfg)
             sub_service = SubtitleService(llm_service)
-            
+            video_editor = VideoEditor()
+
             should_skip_subs = task.skip_subtitles or cfg.get("skip_subtitles", False)
+            chinese_srt = None
+            needs_sub_burn = False
 
             if should_skip_subs:
-                task.log("⚡ Skip Subtitles is ENABLED. Bypassing subtitle STT/translation and FFmpeg burn-in to save CPU resources!")
-                processed_video = video_file
-                chinese_srt = None
+                task.log("⚡ Skip Subtitles is ENABLED. Bypassing subtitle STT/translation!")
             else:
                 is_chinese = info.get("is_chinese", False)
                 if not is_chinese:
-                    task.log("Video language is NOT Chinese. Generating and burning Chinese subtitles...")
+                    task.log("Video language is NOT Chinese. Generating/translating Chinese subtitles...")
                 else:
                     task.log("Video is in Chinese.")
 
-                processed_video, chinese_srt = sub_service.process_subtitles(
+                chinese_srt, needs_sub_burn = sub_service.prepare_chinese_srt(
                     video_path=video_file,
                     sub_path=sub_file,
                     is_chinese=is_chinese,
                     output_dir=downloads_dir / task.id
                 )
 
+            # Secondary creation options
+            sec_opts = task.secondary_creation or {}
+            flip_h = bool(sec_opts.get("flip_horizontal", False))
+            border_r = float(sec_opts.get("border_ratio", 0.0))
+            wm_text = str(sec_opts.get("watermark_text", "")) if sec_opts.get("watermark_enabled", True) else ""
+            wm_opacity = float(sec_opts.get("watermark_opacity", 0.012))
+            preset = cfg.get("ffmpeg_preset", "fast")
+
+            has_secondary = flip_h or (border_r > 0.001) or bool(wm_text.strip())
+
+            if has_secondary or needs_sub_burn:
+                task.log("Processing video with VideoEditor (secondary modifications / subtitle burn-in)...")
+                if flip_h:
+                    task.log("✓ Applied Horizontal Flip (hflip)")
+                if border_r > 0.001:
+                    task.log(f"✓ Applied Black Border Padding (ratio={border_r*100:.1f}%)")
+                if wm_text.strip():
+                    task.log(f"✓ Applied Invisible Contrast Watermark ('{wm_text.strip()}', alpha={wm_opacity})")
+                if needs_sub_burn and chinese_srt:
+                    task.log(f"✓ Burning Subtitles from {chinese_srt.name}")
+
+                out_vid = downloads_dir / task.id / f"processed_{video_file.name}"
+                processed_video = video_editor.process_video(
+                    video_path=video_file,
+                    output_path=out_vid,
+                    flip_horizontal=flip_h,
+                    border_ratio=border_r,
+                    watermark_text=wm_text,
+                    watermark_opacity=wm_opacity,
+                    srt_path=chinese_srt if needs_sub_burn else None,
+                    preset=preset
+                )
+            else:
+                task.log("No video transformations or subtitle burn-in required. Using original video.")
+                processed_video = video_file
+
             task.processed_video_path = str(processed_video)
             task.chinese_srt_path = str(chinese_srt) if chinese_srt else None
             task.progress = 65
-            task.log("Subtitle processing completed.")
+            task.log("Video preparation completed.")
 
             # Step 3: LLM Description Regeneration
             task.status = "LLM_REGENERATION"
@@ -358,7 +458,7 @@ class TaskManager:
                 if not llm_api_key:
                     task.log("⚠️ LLM AI简介重写已在设置中勾选，但未配置 LLM API Key！已自动回退使用 YouTube 原视频简介文本。请在【设置】中填入 API Key 并保存。")
                 else:
-                    task.log(f"LLM AI简介已启用 (Model: {cfg.get('llm_model', 'gpt-4o-mini')})。正在调用 AI 生成 B 站标题与简介...")
+                    task.log(f"LLM AI简介已启用 (Model: {cfg.get('llm_model', 'gpt-4o-mini')})。正在调用 AI 生成视频标题与简介...")
             else:
                 task.log("LLM AI简介未启用。使用 YouTube 原视频标题与简介。")
 
@@ -384,43 +484,94 @@ class TaskManager:
             task.log(f"Final Title: {task.final_title}")
             task.log(f"LLM used: {task.used_llm}")
 
-
-            # Step 4: Bilibili Upload
+            # Step 4: Multi-Platform Upload (Bilibili & YouTube)
             task.status = "UPLOADING"
             task.progress = 85
-            task.log("Initiating Bilibili upload service...")
-            
-            # Sync CookieCloud if configured and not already fetched
-            cfg = config_manager.all()
-            sessdata = cfg.get("bilibili_sessdata", "")
-            bili_jct = cfg.get("bilibili_bili_jct", "")
-            dedeuserid = cfg.get("bilibili_dedeuserid", "")
+            targets = task.upload_targets or ["bilibili"]
+            task.log(f"Target upload platforms: {', '.join(targets)}")
 
-            if not synced_bili_cookies and cfg.get("cookiecloud_url") and cfg.get("cookiecloud_uuid") and cfg.get("cookiecloud_password"):
-                synced_bili_cookies, _ = self._sync_cookiecloud(task=task)
-                cfg = config_manager.all()
-                sessdata = cfg.get("bilibili_sessdata", sessdata)
-                bili_jct = cfg.get("bilibili_bili_jct", bili_jct)
-                dedeuserid = cfg.get("bilibili_dedeuserid", dedeuserid)
+            upload_errors = []
 
-            bili_service = BilibiliService(sessdata, bili_jct, dedeuserid, extra_cookies=synced_bili_cookies or {})
-            
-            def upload_progress(pct: int, msg: str):
-                task.progress = 85 + int(pct * 0.15)
-                task.log(msg)
+            # 4A. Bilibili Upload
+            if "bilibili" in targets:
+                task.log("Initiating Bilibili upload service...")
+                sessdata = cfg.get("bilibili_sessdata", "")
+                bili_jct = cfg.get("bilibili_bili_jct", "")
+                dedeuserid = cfg.get("bilibili_dedeuserid", "")
 
-            upload_res = bili_service.upload_video(
-                video_path=processed_video,
-                title=task.final_title,
-                description=task.final_description,
-                tags=task.final_tags,
-                progress_callback=upload_progress
-            )
+                if not synced_bili_cookies and cfg.get("cookiecloud_url") and cfg.get("cookiecloud_uuid") and cfg.get("cookiecloud_password"):
+                    synced_bili_cookies, _ = self._sync_cookiecloud(task=task)
+                    cfg = config_manager.all()
+                    sessdata = cfg.get("bilibili_sessdata", sessdata)
+                    bili_jct = cfg.get("bilibili_bili_jct", bili_jct)
+                    dedeuserid = cfg.get("bilibili_dedeuserid", dedeuserid)
 
-            task.bvid = upload_res.get("bvid")
+                bili_service = BilibiliService(sessdata, bili_jct, dedeuserid, extra_cookies=synced_bili_cookies or {})
+                
+                def bili_upload_progress(pct: int, msg: str):
+                    task.progress = 85 + int(pct * 0.07)
+                    task.log(msg)
+
+                try:
+                    upload_res = bili_service.upload_video(
+                        video_path=processed_video,
+                        title=task.final_title,
+                        description=task.final_description,
+                        tags=task.final_tags,
+                        progress_callback=bili_upload_progress
+                    )
+                    task.bvid = upload_res.get("bvid")
+                    task.log(f"🎉 视频已成功发布至 Bilibili! BV号: {task.bvid} | 观看链接: https://www.bilibili.com/video/{task.bvid}")
+                except Exception as b_err:
+                    err_msg = f"Bilibili upload error: {b_err}"
+                    upload_errors.append(err_msg)
+                    task.log(f"❌ {err_msg}")
+
+            # 4B. YouTube Upload
+            if "youtube" in targets:
+                task.log("Initiating YouTube upload service...")
+                yt_client_id = cfg.get("youtube_client_id", "")
+                yt_client_secret = cfg.get("youtube_client_secret", "")
+                yt_refresh_token = cfg.get("youtube_refresh_token", "")
+                yt_privacy = cfg.get("youtube_privacy_status", "unlisted")
+                yt_category = cfg.get("youtube_category_id", "22")
+                cover_path = downloads_dir / task.id / "cover.jpg"
+
+                yt_uploader = YouTubeUploaderService(
+                    client_id=yt_client_id,
+                    client_secret=yt_client_secret,
+                    refresh_token=yt_refresh_token
+                )
+
+                def yt_upload_progress(pct: int, msg: str):
+                    task.progress = 92 + int(pct * 0.07)
+                    task.log(msg)
+
+                try:
+                    yt_res = yt_uploader.upload_video(
+                        video_path=processed_video,
+                        title=task.final_title,
+                        description=task.final_description,
+                        tags=task.final_tags,
+                        category_id=yt_category,
+                        privacy_status=yt_privacy,
+                        cover_path=cover_path if cover_path.exists() else None,
+                        progress_callback=yt_upload_progress
+                    )
+                    task.youtube_video_id = yt_res.get("video_id")
+                    task.youtube_watch_url = yt_res.get("url")
+                    task.log(f"🎉 视频已成功发布至 YouTube! 视频ID: {task.youtube_video_id} | 观看链接: {task.youtube_watch_url}")
+                except Exception as yt_err:
+                    err_msg = f"YouTube upload error: {yt_err}"
+                    upload_errors.append(err_msg)
+                    task.log(f"❌ {err_msg}")
+
+            if upload_errors and not task.bvid and not task.youtube_video_id:
+                raise RuntimeError("; ".join(upload_errors))
+
             task.status = "COMPLETED"
             task.progress = 100
-            task.log(f"🎉 视频已成功同步发布至 Bilibili! BV号: {task.bvid} | 观看链接: https://www.bilibili.com/video/{task.bvid}")
+            task.log("🎉 所有目标平台发布任务已完成！")
 
             # Auto cleanup video files after successful upload if enabled
             if cfg.get("auto_delete_after_upload", True):
