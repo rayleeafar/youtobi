@@ -12,6 +12,7 @@ from config import config_manager, BASE_DIR
 from services.task_manager import task_manager
 from services.bilibili import BilibiliService
 from services.cookiecloud import CookieCloudService
+from services.youtube_uploader import YouTubeUploaderService
 
 # Configure logging
 logging.basicConfig(
@@ -73,9 +74,19 @@ async def auth_middleware(request: Request, call_next):
     res = await call_next(request)
     return res
 
+class SecondaryCreationParams(BaseModel):
+    enabled: Optional[bool] = False
+    flip_horizontal: Optional[bool] = False
+    border_ratio: Optional[float] = 0.0
+    watermark_enabled: Optional[bool] = False
+    watermark_text: Optional[str] = ""
+    watermark_opacity: Optional[float] = 0.012
+
 class TaskCreateRequest(BaseModel):
     youtube_url: str
     skip_subtitles: Optional[bool] = False
+    upload_targets: Optional[List[str]] = None
+    secondary_creation: Optional[SecondaryCreationParams] = None
 
 class SkipSubtitlesRequest(BaseModel):
     skip: Optional[bool] = True
@@ -161,7 +172,13 @@ async def create_task(req: TaskCreateRequest):
     if not items:
         raise HTTPException(status_code=400, detail="No valid YouTube URLs found in input.")
     
-    tasks = task_manager.create_batch_tasks(items, skip_subtitles=req.skip_subtitles or False)
+    sec_dict = req.secondary_creation.model_dump() if req.secondary_creation else None
+    tasks = task_manager.create_batch_tasks(
+        items,
+        skip_subtitles=req.skip_subtitles or False,
+        upload_targets=req.upload_targets,
+        secondary_creation=sec_dict
+    )
     return {
         "success": True,
         "count": len(tasks),
@@ -415,6 +432,90 @@ async def check_bilibili():
     )
     result = bili_service.validate_credentials()
     return {"success": True, "result": result}
+
+
+class YouTubeAuthUrlRequest(BaseModel):
+    client_id: Optional[str] = None
+    redirect_uri: Optional[str] = None
+
+class YouTubeOAuthCallbackRequest(BaseModel):
+    code: str
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    redirect_uri: Optional[str] = None
+
+class YouTubeTestRequest(BaseModel):
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    refresh_token: Optional[str] = None
+
+@app.post("/api/youtube/auth-url")
+async def get_youtube_auth_url(req: Optional[YouTubeAuthUrlRequest] = None):
+    cfg = config_manager.all()
+    client_id = (req and req.client_id) or cfg.get("youtube_client_id", "")
+    redirect_uri = (req and req.redirect_uri) or "http://localhost:8166/oauth2callback"
+    if not client_id:
+        raise HTTPException(status_code=400, detail="请先在设置中填写 YouTube Client ID。")
+    
+    url = YouTubeUploaderService.generate_auth_url(client_id, redirect_uri)
+    return {"success": True, "auth_url": url}
+
+@app.post("/api/youtube/oauth-callback")
+async def handle_youtube_oauth_callback(req: YouTubeOAuthCallbackRequest):
+    cfg = config_manager.all()
+    client_id = req.client_id or cfg.get("youtube_client_id", "")
+    client_secret = req.client_secret or cfg.get("youtube_client_secret", "")
+    redirect_uri = req.redirect_uri or "http://localhost:8166/oauth2callback"
+
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="缺少 YouTube Client ID 或 Client Secret。")
+    if not req.code:
+        raise HTTPException(status_code=400, detail="缺少授权 Code。")
+
+    try:
+        token_data = YouTubeUploaderService.exchange_code_for_tokens(
+            client_id=client_id,
+            client_secret=client_secret,
+            code=req.code,
+            redirect_uri=redirect_uri
+        )
+        refresh_token = token_data.get("refresh_token")
+        if refresh_token:
+            config_manager.update({"youtube_refresh_token": refresh_token})
+        return {
+            "success": True,
+            "has_refresh_token": bool(refresh_token),
+            "message": "YouTube OAuth2 授权成功并已保存 Refresh Token！"
+        }
+    except Exception as e:
+        logger.error(f"YouTube OAuth callback exchange error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/youtube/test")
+async def test_youtube_api(req: Optional[YouTubeTestRequest] = None):
+    cfg = config_manager.all()
+    client_id = (req and req.client_id) or cfg.get("youtube_client_id", "")
+    client_secret = (req and req.client_secret) or cfg.get("youtube_client_secret", "")
+    refresh_token = (req and req.refresh_token) or cfg.get("youtube_refresh_token", "")
+
+    if not client_id or not client_secret or not refresh_token:
+        raise HTTPException(status_code=400, detail="请先在设置中填写 YouTube Client ID、Client Secret 并完成授权获取 Refresh Token。")
+
+    try:
+        uploader = YouTubeUploaderService(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token
+        )
+        ch_info = uploader.get_channel_info()
+        return {
+            "success": True,
+            "channel": ch_info,
+            "message": f"YouTube API 连接成功！频道: {ch_info.get('title')} ({ch_info.get('custom_url')})，订阅量: {ch_info.get('subscriber_count')}"
+        }
+    except Exception as e:
+        logger.error(f"YouTube API test error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

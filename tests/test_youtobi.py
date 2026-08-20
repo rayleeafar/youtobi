@@ -650,5 +650,64 @@ Second subtitle line
                 self.assertEqual(task.youtube_watch_url, "https://www.youtube.com/watch?v=YT_DUAL_123")
                 self.assertTrue(mock_editor.called)
 
+    def test_youtube_api_routes(self):
+        from unittest.mock import patch, MagicMock
+        from starlette.testclient import TestClient
+        from app import app, _get_auth_token, AUTH_COOKIE_NAME
+        from config import config_manager
+
+        client = TestClient(app)
+        admin_pwd = config_manager.get("admin_password", "admin")
+        token = _get_auth_token(admin_pwd)
+        client.cookies.set(AUTH_COOKIE_NAME, token)
+
+        # 1. /api/youtube/auth-url
+        resp = client.post("/api/youtube/auth-url", json={"client_id": "test_cid.apps.googleusercontent.com"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("auth_url", resp.json())
+        self.assertIn("test_cid", resp.json()["auth_url"])
+
+        # 2. /api/youtube/oauth-callback
+        with patch("services.youtube_uploader.YouTubeUploaderService.exchange_code_for_tokens", return_value={"refresh_token": "rt_test_777"}):
+            cb_resp = client.post("/api/youtube/oauth-callback", json={
+                "code": "auth_code_123",
+                "client_id": "cid",
+                "client_secret": "csec"
+            })
+            self.assertEqual(cb_resp.status_code, 200)
+            self.assertTrue(cb_resp.json()["has_refresh_token"])
+            self.assertEqual(config_manager.get("youtube_refresh_token"), "rt_test_777")
+
+        # 3. /api/youtube/test
+        with patch("services.youtube_uploader.YouTubeUploaderService.get_channel_info", return_value={"title": "My Channel", "subscriber_count": "500"}):
+            test_resp = client.post("/api/youtube/test", json={
+                "client_id": "cid",
+                "client_secret": "csec",
+                "refresh_token": "rt_test_777"
+            })
+            self.assertEqual(test_resp.status_code, 200)
+            self.assertIn("My Channel", test_resp.json()["message"])
+
+        # 4. /api/tasks with dual targets & secondary creation
+        with patch("services.youtube.YouTubeService.extract_items", return_value=[{"url": "https://youtube.com/watch?v=sample1", "custom_text": None}]), \
+             patch("services.task_manager.task_manager._run_task_pipeline"):
+            task_resp = client.post("/api/tasks", json={
+                "youtube_url": "https://youtube.com/watch?v=sample1",
+                "skip_subtitles": True,
+                "upload_targets": ["bilibili", "youtube"],
+                "secondary_creation": {
+                    "enabled": True,
+                    "flip_horizontal": True,
+                    "border_ratio": 0.05,
+                    "watermark_enabled": True,
+                    "watermark_text": "WATERMARK"
+                }
+            })
+            self.assertEqual(task_resp.status_code, 200)
+            data = task_resp.json()
+            self.assertTrue(data["success"])
+            self.assertEqual(data["task"]["upload_targets"], ["bilibili", "youtube"])
+            self.assertEqual(data["task"]["secondary_creation"]["watermark_text"], "WATERMARK")
+
 if __name__ == "__main__":
     unittest.main()
