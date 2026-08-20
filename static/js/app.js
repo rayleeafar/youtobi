@@ -632,19 +632,20 @@ async function testLLMModel() {
 async function openYouTubeAuthWizard() {
   const clientId = document.getElementById('youtube_client_id').value.trim();
   if (!clientId) {
-    alert('请先填写 YouTube OAuth2 Client ID！');
+    alert('请先填写 YouTube OAuth2 Client ID 并保存设置！');
     return;
   }
+  const redirectUri = window.location.origin + '/oauth2callback';
   try {
     const res = await fetch('/api/youtube/auth-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, redirect_uri: 'http://localhost:8166/oauth2callback' })
+      body: JSON.stringify({ client_id: clientId, redirect_uri: redirectUri })
     });
     const data = await res.json();
     if (data.success && data.auth_url) {
       window.open(data.auth_url, '_blank');
-      const code = prompt('Google 授权页面已在新窗口打开。\n完成授权后，请将浏览器地址栏跳转后的 authorization code 粘贴在此处：');
+      const code = prompt('Google 授权页面已在新窗口打开。\n\n授权成功后页面会自动保存 Token；如果您需要手动粘贴 Code，请在此处粘贴 authorization code：');
       if (code && code.trim()) {
         const clientSecret = document.getElementById('youtube_client_secret').value.trim();
         const cbRes = await fetch('/api/youtube/oauth-callback', {
@@ -654,7 +655,7 @@ async function openYouTubeAuthWizard() {
             code: code.trim(),
             client_id: clientId,
             client_secret: clientSecret,
-            redirect_uri: 'http://localhost:8166/oauth2callback'
+            redirect_uri: redirectUri
           })
         });
         const cbData = await cbRes.json();

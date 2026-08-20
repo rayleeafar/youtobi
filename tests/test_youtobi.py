@@ -764,5 +764,13 @@ Second subtitle line
             self.assertEqual(data["task"]["upload_targets"], ["bilibili", "youtube"])
             self.assertEqual(data["task"]["secondary_creation"]["watermark_text"], "WATERMARK")
 
+        # 5. /oauth2callback GET endpoint
+        with patch("services.youtube_uploader.YouTubeUploaderService.exchange_code_for_tokens", return_value={"refresh_token": "rt_test_page_999"}):
+            config_manager.update({"youtube_client_id": "test_id", "youtube_client_secret": "test_secret"})
+            oauth_page_res = client.get("/oauth2callback?code=sample_code_456")
+            self.assertEqual(oauth_page_res.status_code, 200)
+            self.assertIn("YouTube 账号授权成功", oauth_page_res.text)
+            self.assertEqual(config_manager.get("youtube_refresh_token"), "rt_test_page_999")
+
 if __name__ == "__main__":
     unittest.main()

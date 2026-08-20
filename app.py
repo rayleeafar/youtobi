@@ -56,7 +56,7 @@ def is_authenticated(request: Request) -> bool:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/static") or path.startswith("/app_static") or path in ["/login", "/api/auth/login"]:
+    if path.startswith("/static") or path.startswith("/app_static") or path in ["/login", "/api/auth/login", "/oauth2callback"]:
         res = await call_next(request)
         if path.startswith("/static") or path.startswith("/app_static"):
             res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
@@ -490,6 +490,110 @@ async def handle_youtube_oauth_callback(req: YouTubeOAuthCallbackRequest):
     except Exception as e:
         logger.error(f"YouTube OAuth callback exchange error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/oauth2callback", response_class=HTMLResponse)
+async def oauth2_callback_page(request: Request, code: Optional[str] = None, error: Optional[str] = None):
+    if error:
+        return HTMLResponse(content=f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>YouTube 授权失败</title><meta charset="utf-8">
+        <style>body {{ font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+        .card {{ background: #1e293b; padding: 2.5rem; border-radius: 12px; border: 1px solid #ef4444; max-width: 500px; text-align: center; }}</style>
+        </head>
+        <body>
+          <div class="card">
+            <h2 style="color: #ef4444;">❌ 授权失败</h2>
+            <p>{error}</p>
+            <a href="/" style="color: #38bdf8; text-decoration: none;">返回主页</a>
+          </div>
+        </body></html>
+        """, status_code=400)
+
+    if not code:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head><title>YouTube 授权</title><meta charset="utf-8"></head>
+        <body style="background: #0f172a; color: #f8fafc; text-align: center; padding: 50px;">
+          <h2>未收到授权 Code</h2>
+          <a href="/" style="color: #38bdf8;">返回主页</a>
+        </body></html>
+        """, status_code=400)
+
+    cfg = config_manager.all()
+    client_id = cfg.get("youtube_client_id", "")
+    client_secret = cfg.get("youtube_client_secret", "")
+    redirect_uri = str(request.url.replace(query=None)).rstrip("/")
+
+    token_data = None
+    err_msg = None
+    if client_id and client_secret:
+        try:
+            token_data = YouTubeUploaderService.exchange_code_for_tokens(
+                client_id=client_id,
+                client_secret=client_secret,
+                code=code,
+                redirect_uri=redirect_uri
+            )
+            refresh_token = token_data.get("refresh_token")
+            if refresh_token:
+                config_manager.update({
+                    "youtube_refresh_token": refresh_token,
+                    "youtube_upload_enabled": True
+                })
+        except Exception as e:
+            err_msg = str(e)
+            logger.error(f"Error in automatic OAuth callback exchange: {e}")
+
+    if token_data and token_data.get("refresh_token"):
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>YouTube 授权成功</title>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+            .card { background: #1e293b; padding: 2.5rem; border-radius: 16px; border: 1px solid #10b981; max-width: 520px; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+            h2 { color: #10b981; margin-top: 0; }
+            p { color: #94a3b8; line-height: 1.6; }
+            .btn { display: inline-block; margin-top: 1.5rem; padding: 0.75rem 1.8rem; background: #3b82f6; color: white; text-decoration: none; border-radius: 8px; font-weight: 500; }
+            .btn:hover { background: #2563eb; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h2>🎉 YouTube 账号授权成功！</h2>
+            <p>已成功获取 Google OAuth2 Refresh Token，并自动保存至系统设置。</p>
+            <p>已自动开启「YouTube 自动上传发布」功能，您可以直接返回管理后台发布视频。</p>
+            <a href="/" class="btn">返回管理后台</a>
+          </div>
+        </body></html>
+        """)
+    else:
+        return HTMLResponse(content=f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>YouTube 授权码</title>
+          <meta charset="utf-8">
+          <style>
+            body {{ font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+            .card {{ background: #1e293b; padding: 2rem; border-radius: 12px; border: 1px solid #334155; max-width: 560px; word-break: break-all; }}
+            code {{ background: #0f172a; padding: 0.5rem; border-radius: 6px; display: block; margin: 1rem 0; color: #38bdf8; font-size: 0.9rem; user-select: all; }}
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h3>授权完成！您的 Authorization Code 为：</h3>
+            <code>{code}</code>
+            {f'<p style="color:#ef4444;">提示: {err_msg}</p>' if err_msg else ''}
+            <p style="color:#94a3b8;">如果自动换取 Token 未完成，请复制上方 Code 回到设置页面进行换取。</p>
+            <a href="/" style="color:#38bdf8;">返回主页</a>
+          </div>
+        </body></html>
+        """)
 
 @app.post("/api/youtube/test")
 async def test_youtube_api(req: Optional[YouTubeTestRequest] = None):
