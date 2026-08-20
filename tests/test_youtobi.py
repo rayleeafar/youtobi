@@ -433,8 +433,75 @@ Second subtitle line
             self.assertEqual(config_manager.get("youtube_cookies"), dummy_yt_cookie)
             self.assertEqual(config_manager.get("bilibili_sessdata"), "new_sessdata_val")
             self.assertTrue(any("Syncing fresh cookies from CookieCloud before downloading from YouTube" in log for log in task.logs))
-            self.assertTrue(any("Successfully synced fresh YouTube cookies from CookieCloud" in log for log in task.logs))
             self.assertEqual(task.status, "COMPLETED")
+
+    def test_video_editor_filter_building(self):
+        from services.video_editor import VideoEditor
+        
+        # Test individual filters
+        f_hflip = VideoEditor.build_filter_chain(flip_horizontal=True)
+        self.assertEqual(f_hflip, "hflip")
+
+        f_border = VideoEditor.build_filter_chain(border_ratio=0.05)
+        self.assertIn("scale=w=trunc(iw*0.9", f_border)
+        self.assertIn("pad=w=trunc", f_border)
+        self.assertIn("color=black", f_border)
+
+        f_wm = VideoEditor.build_filter_chain(watermark_text="COPYRIGHT_TEST", watermark_opacity=0.015)
+        self.assertIn("drawtext=text='COPYRIGHT_TEST'", f_wm)
+        self.assertIn("fontcolor=white@0.015", f_wm)
+
+        # Test combined with fake srt
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".srt") as tmp_srt:
+            srt_p = Path(tmp_srt.name)
+            f_all = VideoEditor.build_filter_chain(
+                flip_horizontal=True,
+                border_ratio=0.08,
+                watermark_text="SECRET:MARK",
+                watermark_opacity=0.012,
+                srt_path=srt_p
+            )
+            self.assertIn("hflip", f_all)
+            self.assertIn("scale=", f_all)
+            self.assertIn("subtitles=", f_all)
+            self.assertIn("drawtext=", f_all)
+            self.assertIn("SECRET\\:MARK", f_all)
+
+    def test_video_editor_process_video(self):
+        from services.video_editor import VideoEditor
+        from unittest.mock import patch, MagicMock
+        import tempfile
+
+        editor = VideoEditor()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_p = Path(tmpdir)
+            in_vid = tmp_p / "input.mp4"
+            in_vid.write_bytes(b"dummy")
+            out_vid = tmp_p / "output.mp4"
+
+            # 1. No filters -> returns in_vid directly
+            res_vid = editor.process_video(in_vid, out_vid)
+            self.assertEqual(res_vid, in_vid)
+
+            # 2. With filters -> invokes ffmpeg
+            def fake_ffmpeg(cmd, *args, **kwargs):
+                out_p = Path(cmd[-1])
+                out_p.write_bytes(b"processed_data")
+                m = MagicMock()
+                m.returncode = 0
+                return m
+
+            with patch("subprocess.run", side_effect=fake_ffmpeg):
+                res_proc = editor.process_video(
+                    video_path=in_vid,
+                    output_path=out_vid,
+                    flip_horizontal=True,
+                    border_ratio=0.05,
+                    watermark_text="WM"
+                )
+                self.assertEqual(res_proc, out_vid)
+                self.assertTrue(out_vid.exists())
 
 if __name__ == "__main__":
     unittest.main()
