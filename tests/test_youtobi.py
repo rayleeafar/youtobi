@@ -57,6 +57,16 @@ class TestYoutobi(unittest.TestCase):
         self.assertEqual(updated["secondary_border_ratio"], 0.05)
         self.assertEqual(updated["secondary_watermark_text"], "MY_WATERMARK")
 
+        # Reset config state for subsequent tests
+        self.client.post("/api/config", json={
+            "upload_targets": ["bilibili"],
+            "youtube_upload_enabled": False,
+            "secondary_creation_enabled": False,
+            "secondary_flip_horizontal": False,
+            "secondary_border_ratio": 0.0,
+            "secondary_watermark_enabled": False
+        })
+
     def test_auth_flow(self):
         unauth_client = TestClient(app)
         res = unauth_client.get("/api/config")
@@ -239,7 +249,8 @@ Second subtitle line
         with patch("services.task_manager.YouTubeService") as mock_yt_cls, \
              patch("services.task_manager.SubtitleService") as mock_sub_cls, \
              patch("services.task_manager.LLMService") as mock_llm_cls, \
-             patch("services.task_manager.BilibiliService") as mock_bili_cls:
+             patch("services.task_manager.BilibiliService") as mock_bili_cls, \
+             patch("services.task_manager.YouTubeUploaderService") as mock_yt_up_cls:
 
             mock_yt = mock_yt_cls.return_value
             mock_yt.extract_info.return_value = dummy_info
@@ -401,7 +412,8 @@ Second subtitle line
              patch("services.task_manager.YouTubeService") as mock_yt_cls, \
              patch("services.task_manager.SubtitleService") as mock_sub_cls, \
              patch("services.task_manager.LLMService") as mock_llm_cls, \
-             patch("services.task_manager.BilibiliService") as mock_bili_cls:
+             patch("services.task_manager.BilibiliService") as mock_bili_cls, \
+             patch("services.task_manager.YouTubeUploaderService") as mock_yt_up_cls:
 
             mock_cc = mock_cc_cls.return_value
             mock_cc.fetch_all_synced_cookies.return_value = (dummy_bili_cookies, dummy_yt_cookie)
