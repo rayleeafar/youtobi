@@ -13,7 +13,48 @@ from services.task_manager import task_manager
 from services.bilibili import BilibiliService
 
 
+import tempfile
+from config import config_manager, DEFAULT_CONFIG
+
+
 class TestYoutobi(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.temp_config = Path(cls.temp_dir.name) / "test_config.json"
+        cls.temp_tasks = Path(cls.temp_dir.name) / "test_tasks.json"
+
+        # Back up original paths and state
+        cls.orig_config_path = config_manager.file_path
+        cls.orig_config_dict = config_manager._config.copy()
+        cls.orig_task_path = task_manager.file_path
+        cls.orig_tasks = task_manager.tasks.copy()
+
+        # Switch to isolated temp test files
+        config_manager.file_path = cls.temp_config
+        config_manager._config = DEFAULT_CONFIG.copy()
+        config_manager._config["admin_password"] = "admin"
+        config_manager.save()
+
+        task_manager.file_path = cls.temp_tasks
+        task_manager.tasks = {}
+        task_manager.save_tasks()
+
+    @classmethod
+    def tearDownClass(cls):
+        # Restore original paths and state
+        config_manager.file_path = cls.orig_config_path
+        config_manager._config = cls.orig_config_dict
+        if cls.orig_config_path.exists():
+            config_manager.save()
+
+        task_manager.file_path = cls.orig_task_path
+        task_manager.tasks = cls.orig_tasks
+        if cls.orig_task_path.exists():
+            task_manager.save_tasks()
+
+        cls.temp_dir.cleanup()
+
     def setUp(self):
         self.client = TestClient(app)
         pwd = config_manager.get("admin_password", "admin")
@@ -265,6 +306,7 @@ Second subtitle line
             mock_yt.download_video_and_subtitles.return_value = (dummy_video, None, dummy_info)
 
             mock_sub = mock_sub_cls.return_value
+            mock_sub.prepare_chinese_srt.return_value = (None, False)
             mock_sub.process_subtitles.return_value = (dummy_video, None)
 
             mock_llm = mock_llm_cls.return_value
@@ -429,6 +471,7 @@ Second subtitle line
             mock_yt.download_video_and_subtitles.return_value = (dummy_video, None, {})
 
             mock_sub = mock_sub_cls.return_value
+            mock_sub.prepare_chinese_srt.return_value = (None, False)
             mock_sub.process_subtitles.return_value = (dummy_video, None)
 
             mock_llm = mock_llm_cls.return_value
