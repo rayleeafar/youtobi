@@ -70,7 +70,9 @@ async function loadConfig() {
         document.getElementById('youtube_upload_enabled').checked = cfg.youtube_upload_enabled || false;
         document.getElementById('youtube_client_id').value = cfg.youtube_client_id || '';
         document.getElementById('youtube_privacy_status').value = cfg.youtube_privacy_status || 'unlisted';
-        document.getElementById('youtube_category_id').value = cfg.youtube_category_id || '22';
+        const catId = cfg.youtube_category_id || '22';
+        document.getElementById('youtube_category_id').value = catId;
+        onYouTubeCategoryInput(catId);
 
         const ytSecretInput = document.getElementById('youtube_client_secret');
         if (cfg.has_youtube_client_secret) {
@@ -155,7 +157,7 @@ async function handleConfigSave(event) {
     youtube_client_secret: document.getElementById('youtube_client_secret') ? document.getElementById('youtube_client_secret').value : '',
     youtube_refresh_token: document.getElementById('youtube_refresh_token') ? document.getElementById('youtube_refresh_token').value : '',
     youtube_privacy_status: document.getElementById('youtube_privacy_status') ? document.getElementById('youtube_privacy_status').value : 'unlisted',
-    youtube_category_id: document.getElementById('youtube_category_id') ? document.getElementById('youtube_category_id').value : '22',
+    youtube_category_id: document.getElementById('youtube_category_id') ? (document.getElementById('youtube_category_id').value.trim() || '22') : '22',
     secondary_flip_horizontal: document.getElementById('cfg_secondary_flip_horizontal') ? document.getElementById('cfg_secondary_flip_horizontal').checked : false,
     secondary_border_ratio: document.getElementById('cfg_secondary_border_ratio') ? parseFloat(document.getElementById('cfg_secondary_border_ratio').value || '0') : 0.0,
     secondary_watermark_enabled: document.getElementById('cfg_secondary_watermark_enabled') ? document.getElementById('cfg_secondary_watermark_enabled').checked : false,
@@ -626,6 +628,34 @@ async function testLLMModel() {
   } catch (err) {
     badge.style.color = '#ff5252';
     badge.innerText = `网络错误: ${err.message}`;
+  }
+}
+
+function onYouTubeCategorySelectChange(val) {
+  const catInput = document.getElementById('youtube_category_id');
+  if (!catInput) return;
+  if (val !== 'custom') {
+    catInput.value = val;
+  } else {
+    catInput.focus();
+    catInput.select();
+  }
+}
+
+function onYouTubeCategoryInput(val) {
+  const catSelect = document.getElementById('youtube_category_select');
+  if (!catSelect) return;
+  const cleanVal = (val || '').trim();
+  let matched = false;
+  for (let i = 0; i < catSelect.options.length; i++) {
+    if (catSelect.options[i].value === cleanVal) {
+      catSelect.selectedIndex = i;
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) {
+    catSelect.value = 'custom';
   }
 }
 

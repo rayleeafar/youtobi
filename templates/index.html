@@ -276,8 +276,28 @@
             </select>
           </div>
           <div class="form-group">
-            <label for="youtube_category_id">视频分类 ID (Category ID)</label>
-            <input type="text" id="youtube_category_id" class="input-field" placeholder="22 (People & Blogs)">
+            <label for="youtube_category_id">视频分类 (Category ID)</label>
+            <div style="display: flex; gap: 8px;">
+              <select id="youtube_category_select" class="input-field" style="flex: 2;" onchange="onYouTubeCategorySelectChange(this.value)">
+                <option value="22">22 - 人物与博客 (People & Blogs)</option>
+                <option value="24">24 - 娱乐 (Entertainment)</option>
+                <option value="20">20 - 游戏 (Gaming)</option>
+                <option value="10">10 - 音乐 (Music)</option>
+                <option value="27">27 - 教育 (Education)</option>
+                <option value="28">28 - 科学与技术 (Science & Tech)</option>
+                <option value="23">23 - 搞笑 (Comedy)</option>
+                <option value="1">1 - 电影与动画 (Film & Animation)</option>
+                <option value="2">2 - 汽车与车辆 (Autos & Vehicles)</option>
+                <option value="15">15 - 宠物与动物 (Pets & Animals)</option>
+                <option value="17">17 - 体育 (Sports)</option>
+                <option value="19">19 - 旅游与活动 (Travel & Events)</option>
+                <option value="25">25 - 新闻与政治 (News & Politics)</option>
+                <option value="26">26 - 指南与风格 (Howto & Style)</option>
+                <option value="29">29 - 非营利与行动 (Nonprofits)</option>
+                <option value="custom">✏️ 自定义 ID (手动输入)...</option>
+              </select>
+              <input type="text" id="youtube_category_id" class="input-field" style="flex: 1; max-width: 90px; text-align: center;" placeholder="ID" oninput="onYouTubeCategoryInput(this.value)">
+            </div>
           </div>
         </div>
         <div class="form-group">
