@@ -503,5 +503,107 @@ Second subtitle line
                 self.assertEqual(res_proc, out_vid)
                 self.assertTrue(out_vid.exists())
 
+    def test_youtube_uploader_auth_and_token_refresh(self):
+        from services.youtube_uploader import YouTubeUploaderService
+        from unittest.mock import patch, MagicMock
+
+        # 1. Auth URL generation
+        auth_url = YouTubeUploaderService.generate_auth_url(client_id="test_client_123", redirect_uri="http://localhost:8000/callback")
+        self.assertIn("client_id=test_client_123", auth_url)
+        self.assertIn("redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fcallback", auth_url)
+        self.assertIn("response_type=code", auth_url)
+
+        # 2. Token Exchange
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"access_token": "acc_123", "refresh_token": "ref_456", "expires_in": 3600}
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            res = YouTubeUploaderService.exchange_code_for_tokens(
+                client_id="cid", client_secret="csec", code="code_abc", redirect_uri="http://cb"
+            )
+            self.assertEqual(res["access_token"], "acc_123")
+            self.assertEqual(res["refresh_token"], "ref_456")
+
+        # 3. Token Refresh
+        svc = YouTubeUploaderService(client_id="cid", client_secret="csec", refresh_token="ref_old")
+        mock_resp.json.return_value = {"access_token": "acc_refreshed", "expires_in": 3600}
+        with patch("requests.post", return_value=mock_resp):
+            token = svc.get_access_token(force_refresh=True)
+            self.assertEqual(token, "acc_refreshed")
+
+    def test_youtube_uploader_channel_info_and_upload(self):
+        from services.youtube_uploader import YouTubeUploaderService
+        from unittest.mock import patch, MagicMock
+        import tempfile
+
+        svc = YouTubeUploaderService(access_token="valid_token")
+
+        # 1. Channel Info
+        mock_ch_resp = MagicMock()
+        mock_ch_resp.ok = True
+        mock_ch_resp.json.return_value = {
+            "items": [
+                {
+                    "id": "UC_TEST_123",
+                    "snippet": {"title": "Test Channel", "customUrl": "@testchan"},
+                    "statistics": {"subscriberCount": "1000", "videoCount": "50"}
+                }
+            ]
+        }
+        with patch("requests.get", return_value=mock_ch_resp):
+            ch_info = svc.get_channel_info()
+            self.assertEqual(ch_info["channel_id"], "UC_TEST_123")
+            self.assertEqual(ch_info["title"], "Test Channel")
+            self.assertEqual(ch_info["subscriber_count"], "1000")
+
+        # 2. Upload Video
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_p = Path(tmpdir)
+            test_vid = tmp_p / "upload_sample.mp4"
+            test_vid.write_bytes(b"dummy_mp4_content" * 100)
+            test_cover = tmp_p / "cover.jpg"
+            test_cover.write_bytes(b"dummy_jpg")
+
+            # Mock initiate POST
+            init_resp = MagicMock()
+            init_resp.status_code = 200
+            init_resp.headers = {"Location": "https://upload.youtube.com/resumable_session_url"}
+
+            # Mock chunk PUT
+            chunk_resp = MagicMock()
+            chunk_resp.status_code = 200
+            chunk_resp.json.return_value = {"id": "YT_VID_999", "snippet": {"title": "Uploaded Title"}}
+
+            # Mock thumbnail POST
+            thumb_resp = MagicMock()
+            thumb_resp.ok = True
+
+            progresses = []
+            def on_prog(pct, msg):
+                progresses.append((pct, msg))
+
+            def mock_requests_post(url, *args, **kwargs):
+                if "uploadType=resumable" in url:
+                    return init_resp
+                elif "thumbnails/set" in url:
+                    return thumb_resp
+                return MagicMock(status_code=400)
+
+            with patch("requests.post", side_effect=mock_requests_post), \
+                 patch("requests.put", return_value=chunk_resp):
+                upload_res = svc.upload_video(
+                    video_path=test_vid,
+                    title="Uploaded Title",
+                    description="Uploaded Desc",
+                    tags=["tag1", "tag2"],
+                    cover_path=test_cover,
+                    progress_callback=on_prog
+                )
+
+                self.assertEqual(upload_res["video_id"], "YT_VID_999")
+                self.assertEqual(upload_res["url"], "https://www.youtube.com/watch?v=YT_VID_999")
+                self.assertTrue(len(progresses) > 0)
+                self.assertEqual(progresses[-1][0], 100)
+
 if __name__ == "__main__":
     unittest.main()
