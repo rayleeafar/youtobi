@@ -47,6 +47,50 @@
             required 
             style="resize: vertical; font-family: inherit; line-height: 1.4;"
           ></textarea>
+
+          <!-- Upload Target Selector -->
+          <div style="background: rgba(10, 14, 23, 0.6); border: 1px solid var(--panel-border); border-radius: var(--radius-md); padding: 0.8rem 1rem;">
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.5rem;">🎯 发布目标平台 (Target Platforms):</label>
+            <div class="target-selector" style="display: flex; gap: 12px; flex-wrap: wrap;">
+              <label class="target-option">
+                <input type="checkbox" id="target_bilibili" checked>
+                <span class="target-chip">📺 哔哩哔哩 (Bilibili)</span>
+              </label>
+              <label class="target-option">
+                <input type="checkbox" id="target_youtube">
+                <span class="target-chip">🔴 YouTube 频道</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Video Secondary Creation Accordion -->
+          <details class="secondary-accordion" id="secondaryCreationDetails" style="background: rgba(10, 14, 23, 0.6); border: 1px solid var(--panel-border); border-radius: var(--radius-md); padding: 0.8rem 1rem;">
+            <summary style="cursor: pointer; font-weight: 600; font-size: 0.9rem; color: var(--accent-cyan); display: flex; align-items: center; justify-content: space-between; user-select: none;">
+              <span>🎨 视频二创增强处理 (Secondary Creation / 规避查重)</span>
+              <span style="font-size: 0.75rem; color: var(--text-muted);">展开/折叠</span>
+            </summary>
+            <div style="margin-top: 0.8rem; display: flex; flex-direction: column; gap: 0.8rem;">
+              <label class="toggle-switch" style="font-size: 0.85rem;">
+                <input type="checkbox" id="sec_flip_horizontal">
+                <span>🪞 画面水平镜像翻转 (Horizontal Flip) - 规避画质指纹</span>
+              </label>
+              <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                  <span>🖼️ 画布微缩黑边缩放 (Border Ratio):</span>
+                  <span id="sec_border_ratio_val" style="font-weight: 600; color: var(--accent-blue);">0%</span>
+                </div>
+                <input type="range" id="sec_border_ratio" min="0" max="0.20" step="0.01" value="0" style="width: 100%; cursor: pointer;" oninput="document.getElementById('sec_border_ratio_val').innerText = Math.round(this.value * 100) + '%'">
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                <label class="toggle-switch" style="font-size: 0.85rem;">
+                  <input type="checkbox" id="sec_watermark_enabled">
+                  <span>🛡️ 极值对比度隐形防盗水印 (Invisible Watermark)</span>
+                </label>
+                <input type="text" id="sec_watermark_text" class="input-field" placeholder="水印文字 (例如: 你的品牌名/专属标识)" style="font-size: 0.85rem; padding: 0.5rem 0.8rem;">
+              </div>
+            </div>
+          </details>
+
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.8rem;">
             <label class="toggle-switch" style="font-size: 0.88rem; color: var(--text-main);">
               <input type="checkbox" id="skip_subtitles_form">
@@ -200,6 +244,81 @@
         <div style="display: flex; gap: 10px; margin-bottom: 1.5rem;">
           <button type="button" class="btn btn-secondary" onclick="checkBilibiliLogin()">🔍 验证 Bilibili 登录状态</button>
           <div id="biliStatusBadge" style="align-self: center; font-size: 0.85rem; font-weight: 600;"></div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid var(--panel-border); margin: 1.5rem 0;">
+
+        <!-- YouTube Data API v3 Upload Section -->
+        <h4 style="font-size: 1rem; color: #ff5252; margin-bottom: 1rem;">🔴 YouTube Data API v3 自动发布设置</h4>
+        <div class="form-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="youtube_upload_enabled">
+            <span>启用 YouTube 自动发布支持</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="youtube_client_id">OAuth2 Client ID</label>
+            <input type="text" id="youtube_client_id" class="input-field" placeholder="xxx.apps.googleusercontent.com">
+          </div>
+          <div class="form-group">
+            <label for="youtube_client_secret">OAuth2 Client Secret</label>
+            <input type="password" id="youtube_client_secret" class="input-field" placeholder="GOCSPX-...">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="youtube_privacy_status">默认发布隐私状态 (Privacy)</label>
+            <select id="youtube_privacy_status" class="input-field">
+              <option value="unlisted">unlisted (不公开 - 推荐)</option>
+              <option value="public">public (公开)</option>
+              <option value="private">private (私享)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="youtube_category_id">视频分类 ID (Category ID)</label>
+            <input type="text" id="youtube_category_id" class="input-field" placeholder="22 (People & Blogs)">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="youtube_refresh_token">OAuth2 Refresh Token</label>
+          <input type="password" id="youtube_refresh_token" class="input-field" placeholder="点击下方授权获取，或手动填入 Refresh Token">
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 0.8rem; margin-bottom: 1rem; flex-wrap: wrap;">
+          <button type="button" class="btn btn-secondary" onclick="openYouTubeAuthWizard()">🔑 生成授权链接并登录</button>
+          <button type="button" class="btn btn-secondary" onclick="testYouTubeApi()">🧪 测试 YouTube API 连通性</button>
+          <div id="youtubeTestStatusBadge" style="align-self: center; font-size: 0.85rem; font-weight: 600;"></div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid var(--panel-border); margin: 1.5rem 0;">
+
+        <!-- Secondary Creation Global Defaults Section -->
+        <h4 style="font-size: 1rem; color: var(--accent-cyan); margin-bottom: 1rem;">🎨 视频二创默认选项 (Secondary Creation Defaults)</h4>
+        <div class="form-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="cfg_secondary_flip_horizontal">
+            <span>默认启用画面水平镜像翻转 (Horizontal Flip)</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="cfg_secondary_border_ratio">默认画布黑边缩放比例 (0.0 - 0.20)</label>
+            <input type="number" id="cfg_secondary_border_ratio" class="input-field" min="0" max="0.20" step="0.01" placeholder="0.05">
+          </div>
+          <div class="form-group">
+            <label for="cfg_secondary_watermark_opacity">水印透明度 (0.005 - 0.05)</label>
+            <input type="number" id="cfg_secondary_watermark_opacity" class="input-field" min="0.001" max="0.10" step="0.001" placeholder="0.012">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="cfg_secondary_watermark_enabled">
+            <span>默认启用隐形防盗水印</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="cfg_secondary_watermark_text">默认水印文字</label>
+          <input type="text" id="cfg_secondary_watermark_text" class="input-field" placeholder="例如: 你的品牌名或防盗标识">
         </div>
 
         <hr style="border: 0; border-top: 1px solid var(--panel-border); margin: 1.5rem 0;">

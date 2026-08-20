@@ -65,6 +65,57 @@ async function loadConfig() {
       if (cfg.bilibili_bili_jct) document.getElementById('bilibili_bili_jct').value = cfg.bilibili_bili_jct;
       if (cfg.bilibili_dedeuserid) document.getElementById('bilibili_dedeuserid').value = cfg.bilibili_dedeuserid;
 
+      // YouTube Upload Settings
+      if (document.getElementById('youtube_upload_enabled')) {
+        document.getElementById('youtube_upload_enabled').checked = cfg.youtube_upload_enabled || false;
+        document.getElementById('youtube_client_id').value = cfg.youtube_client_id || '';
+        document.getElementById('youtube_privacy_status').value = cfg.youtube_privacy_status || 'unlisted';
+        document.getElementById('youtube_category_id').value = cfg.youtube_category_id || '22';
+
+        const ytSecretInput = document.getElementById('youtube_client_secret');
+        if (cfg.has_youtube_client_secret) {
+          ytSecretInput.placeholder = `已配置 (${cfg.youtube_client_secret_masked}) - 如需修改请输入`;
+          ytSecretInput.value = '';
+        } else {
+          ytSecretInput.placeholder = 'GOCSPX-...';
+          ytSecretInput.value = '';
+        }
+
+        const ytTokenInput = document.getElementById('youtube_refresh_token');
+        if (cfg.has_youtube_refresh_token) {
+          ytTokenInput.placeholder = `已授权 (${cfg.youtube_refresh_token_masked}) - 如需重设可重新授权`;
+          ytTokenInput.value = '';
+        } else {
+          ytTokenInput.placeholder = '点击下方授权获取，或手动填入 Refresh Token';
+          ytTokenInput.value = '';
+        }
+      }
+
+      // Secondary Creation Global Defaults
+      if (document.getElementById('cfg_secondary_flip_horizontal')) {
+        document.getElementById('cfg_secondary_flip_horizontal').checked = cfg.secondary_flip_horizontal || false;
+        document.getElementById('cfg_secondary_border_ratio').value = cfg.secondary_border_ratio !== undefined ? cfg.secondary_border_ratio : 0.0;
+        document.getElementById('cfg_secondary_watermark_enabled').checked = cfg.secondary_watermark_enabled || false;
+        document.getElementById('cfg_secondary_watermark_text').value = cfg.secondary_watermark_text || '';
+        document.getElementById('cfg_secondary_watermark_opacity').value = cfg.secondary_watermark_opacity !== undefined ? cfg.secondary_watermark_opacity : 0.012;
+      }
+
+      // Initial task form values (from defaults)
+      if (!window.__formInitialized) {
+        window.__formInitialized = true;
+        if (cfg.upload_targets && document.getElementById('target_bilibili')) {
+          document.getElementById('target_bilibili').checked = cfg.upload_targets.includes('bilibili');
+          document.getElementById('target_youtube').checked = cfg.upload_targets.includes('youtube');
+        }
+        if (document.getElementById('sec_flip_horizontal')) {
+          document.getElementById('sec_flip_horizontal').checked = cfg.secondary_flip_horizontal || false;
+          document.getElementById('sec_border_ratio').value = cfg.secondary_border_ratio || 0;
+          document.getElementById('sec_border_ratio_val').innerText = Math.round((cfg.secondary_border_ratio || 0) * 100) + '%';
+          document.getElementById('sec_watermark_enabled').checked = cfg.secondary_watermark_enabled || false;
+          document.getElementById('sec_watermark_text').value = cfg.secondary_watermark_text || '';
+        }
+      }
+
       document.getElementById('cookiecloud_url').value = cfg.cookiecloud_url || '';
       document.getElementById('cookiecloud_uuid').value = cfg.cookiecloud_uuid || '';
       if (cfg.cookiecloud_password) document.getElementById('cookiecloud_password').value = cfg.cookiecloud_password;
@@ -99,6 +150,17 @@ async function handleConfigSave(event) {
     bilibili_sessdata: document.getElementById('bilibili_sessdata').value,
     bilibili_bili_jct: document.getElementById('bilibili_bili_jct').value,
     bilibili_dedeuserid: document.getElementById('bilibili_dedeuserid').value,
+    youtube_upload_enabled: document.getElementById('youtube_upload_enabled') ? document.getElementById('youtube_upload_enabled').checked : false,
+    youtube_client_id: document.getElementById('youtube_client_id') ? document.getElementById('youtube_client_id').value : '',
+    youtube_client_secret: document.getElementById('youtube_client_secret') ? document.getElementById('youtube_client_secret').value : '',
+    youtube_refresh_token: document.getElementById('youtube_refresh_token') ? document.getElementById('youtube_refresh_token').value : '',
+    youtube_privacy_status: document.getElementById('youtube_privacy_status') ? document.getElementById('youtube_privacy_status').value : 'unlisted',
+    youtube_category_id: document.getElementById('youtube_category_id') ? document.getElementById('youtube_category_id').value : '22',
+    secondary_flip_horizontal: document.getElementById('cfg_secondary_flip_horizontal') ? document.getElementById('cfg_secondary_flip_horizontal').checked : false,
+    secondary_border_ratio: document.getElementById('cfg_secondary_border_ratio') ? parseFloat(document.getElementById('cfg_secondary_border_ratio').value || '0') : 0.0,
+    secondary_watermark_enabled: document.getElementById('cfg_secondary_watermark_enabled') ? document.getElementById('cfg_secondary_watermark_enabled').checked : false,
+    secondary_watermark_text: document.getElementById('cfg_secondary_watermark_text') ? document.getElementById('cfg_secondary_watermark_text').value : '',
+    secondary_watermark_opacity: document.getElementById('cfg_secondary_watermark_opacity') ? parseFloat(document.getElementById('cfg_secondary_watermark_opacity').value || '0.012') : 0.012,
     cookiecloud_url: document.getElementById('cookiecloud_url').value,
     cookiecloud_uuid: document.getElementById('cookiecloud_uuid').value,
     cookiecloud_password: document.getElementById('cookiecloud_password').value,
@@ -134,6 +196,32 @@ async function handleFormSubmit(event) {
   const skipForm = document.getElementById('skip_subtitles_form');
   const skipSubtitles = skipForm ? skipForm.checked : false;
 
+  const targets = [];
+  if (document.getElementById('target_bilibili') && document.getElementById('target_bilibili').checked) {
+    targets.push('bilibili');
+  }
+  if (document.getElementById('target_youtube') && document.getElementById('target_youtube').checked) {
+    targets.push('youtube');
+  }
+  if (targets.length === 0) {
+    alert('请至少勾选一个发布目标平台 (Bilibili 或 YouTube)！');
+    return;
+  }
+
+  const secFlip = document.getElementById('sec_flip_horizontal') ? document.getElementById('sec_flip_horizontal').checked : false;
+  const secBorder = document.getElementById('sec_border_ratio') ? parseFloat(document.getElementById('sec_border_ratio').value || '0') : 0;
+  const secWmEnabled = document.getElementById('sec_watermark_enabled') ? document.getElementById('sec_watermark_enabled').checked : false;
+  const secWmText = document.getElementById('sec_watermark_text') ? document.getElementById('sec_watermark_text').value.trim() : '';
+  const secEnabled = secFlip || (secBorder > 0.001) || (secWmEnabled && secWmText.length > 0);
+
+  const secondaryCreation = {
+    enabled: secEnabled,
+    flip_horizontal: secFlip,
+    border_ratio: secBorder,
+    watermark_enabled: secWmEnabled,
+    watermark_text: secWmText
+  };
+
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.innerText = '提交中...';
@@ -142,7 +230,12 @@ async function handleFormSubmit(event) {
     const res = await fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ youtube_url: url, skip_subtitles: skipSubtitles })
+      body: JSON.stringify({
+        youtube_url: url,
+        skip_subtitles: skipSubtitles,
+        upload_targets: targets,
+        secondary_creation: secondaryCreation
+      })
     });
     const data = await res.json();
     if (data.success) {
@@ -299,9 +392,9 @@ function renderTaskCard(task) {
   const statusLabels = {
     'PENDING': '等待处理',
     'DOWNLOADING': '下载视频中',
-    'SUBTITLE_PROCESSING': '字幕生成与烧录',
+    'SUBTITLE_PROCESSING': '字幕与视频处理',
     'LLM_REGENERATION': 'AI简介生成中',
-    'UPLOADING': '上传至Bilibili',
+    'UPLOADING': '上传至目标平台',
     'COMPLETED': '已完成发布',
     'FAILED': '处理失败',
     'PAUSED': '已暂停/停止',
@@ -313,12 +406,56 @@ function renderTaskCard(task) {
   const isStopped = ['PAUSED', 'STOPPED', 'CANCELLED', 'FAILED'].includes(task.status);
   const taskTitle = escapeHtml(task.final_title || task.youtube_info?.title || task.youtube_url);
 
+  // Target platform badges
+  const targets = task.upload_targets || ['bilibili'];
+  const targetBadgesHtml = targets.map(t => {
+    if (t === 'bilibili') return `<span class="badge" style="background: rgba(0, 242, 254, 0.15); color: var(--accent-cyan); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">📺 B站</span>`;
+    if (t === 'youtube') return `<span class="badge" style="background: rgba(255, 82, 82, 0.15); color: #ff5252; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">🔴 YouTube</span>`;
+    return '';
+  }).join(' ');
+
+  // Secondary creation tags
+  const sec = task.secondary_creation || {};
+  const secChips = [];
+  if (sec.flip_horizontal) secChips.push('<span class="tag-badge">🪞 镜像翻转</span>');
+  if (sec.border_ratio > 0.001) secChips.push(`<span class="tag-badge">🖼️ 黑边 ${Math.round(sec.border_ratio*100)}%</span>`);
+  if (sec.watermark_text) secChips.push(`<span class="tag-badge">🛡️ 水印</span>`);
+  const secBadgesHtml = secChips.join(' ');
+
+  // Platform Links
+  let linksHtml = '';
+  if (task.bvid) {
+    linksHtml += `
+      <div style="background: rgba(0, 230, 118, 0.1); border: 1px solid rgba(0, 230, 118, 0.3); padding: 0.6rem 1rem; border-radius: var(--radius-md); margin-bottom: 0.5rem; color: var(--success); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+        <div>📺 已发布至 <strong>Bilibili</strong> (BV: ${task.bvid})</div>
+        <a href="https://www.bilibili.com/video/${task.bvid}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="border-color: rgba(0, 230, 118, 0.5); color: #00e676; text-decoration: none; padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+          🔗 前往 B 站观看 ↗
+        </a>
+      </div>
+    `;
+  }
+  if (task.youtube_video_id || task.youtube_watch_url) {
+    const ytWatchUrl = task.youtube_watch_url || `https://www.youtube.com/watch?v=${task.youtube_video_id}`;
+    linksHtml += `
+      <div style="background: rgba(255, 82, 82, 0.1); border: 1px solid rgba(255, 82, 82, 0.3); padding: 0.6rem 1rem; border-radius: var(--radius-md); margin-bottom: 0.5rem; color: #ff5252; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+        <div>🔴 已发布至 <strong>YouTube</strong> (ID: ${task.youtube_video_id || ''})</div>
+        <a href="${ytWatchUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="border-color: rgba(255, 82, 82, 0.5); color: #ff5252; text-decoration: none; padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+          🔗 前往 YouTube 观看 ↗
+        </a>
+      </div>
+    `;
+  }
+
   return `
     <div class="task-card">
       <div class="task-header">
         <div>
-          <span class="task-id">TASK #${task.id}</span>
-          <h3 style="font-size: 1.1rem; margin-top: 4px;">${taskTitle}</h3>
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;">
+            <span class="task-id">TASK #${task.id}</span>
+            ${targetBadgesHtml}
+            ${secBadgesHtml}
+          </div>
+          <h3 style="font-size: 1.1rem; margin-top: 2px;">${taskTitle}</h3>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
           ${task.skip_subtitles ? `<span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #eab308; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">⚡ 跳过字幕</span>` : ''}
@@ -345,18 +482,11 @@ function renderTaskCard(task) {
         <button class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; border-color: rgba(255, 82, 82, 0.4); color: #ff5252;" onclick="deleteTask('${task.id}')">🗑️ 删除</button>
       </div>
 
-      ${task.bvid ? `
-        <div style="background: rgba(0, 230, 118, 0.1); border: 1px solid rgba(0, 230, 118, 0.3); padding: 0.8rem 1rem; border-radius: var(--radius-md); margin-bottom: 1rem; color: var(--success); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-          <div>🎉 已成功同步发布至 Bilibili! BV号: <strong>${task.bvid}</strong></div>
-          <a href="https://www.bilibili.com/video/${task.bvid}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="border-color: rgba(0, 230, 118, 0.5); color: #00e676; text-decoration: none; padding: 0.3rem 0.75rem; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 4px;">
-            🔗 点击跳转观看 ↗
-          </a>
-        </div>
-      ` : ''}
+      ${linksHtml}
 
       ${task.final_description ? `
         <div style="margin-bottom: 1rem; font-size: 0.9rem; color: var(--text-main); background: rgba(255,255,255,0.03); padding: 0.8rem; border-radius: var(--radius-sm);">
-          <strong>B站发布简介 (${task.used_llm ? '🧠 LLM 已生成' : '未启用/未配置 LLM'}):</strong>
+          <strong>发布简介 (${task.used_llm ? '🧠 LLM 已生成' : '未启用/未配置 LLM'}):</strong>
           <p style="white-space: pre-line; color: var(--text-muted); margin-top: 4px;">${escapeHtml(task.final_description.slice(0, 200))}...</p>
         </div>
       ` : ''}
@@ -492,6 +622,83 @@ async function testLLMModel() {
     } else {
       badge.style.color = '#ff5252';
       badge.innerText = `❌ 测试失败: ${data.detail || '无法连接'}`;
+    }
+  } catch (err) {
+    badge.style.color = '#ff5252';
+    badge.innerText = `网络错误: ${err.message}`;
+  }
+}
+
+async function openYouTubeAuthWizard() {
+  const clientId = document.getElementById('youtube_client_id').value.trim();
+  if (!clientId) {
+    alert('请先填写 YouTube OAuth2 Client ID！');
+    return;
+  }
+  try {
+    const res = await fetch('/api/youtube/auth-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, redirect_uri: 'http://localhost:8166/oauth2callback' })
+    });
+    const data = await res.json();
+    if (data.success && data.auth_url) {
+      window.open(data.auth_url, '_blank');
+      const code = prompt('Google 授权页面已在新窗口打开。\n完成授权后，请将浏览器地址栏跳转后的 authorization code 粘贴在此处：');
+      if (code && code.trim()) {
+        const clientSecret = document.getElementById('youtube_client_secret').value.trim();
+        const cbRes = await fetch('/api/youtube/oauth-callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: code.trim(),
+            client_id: clientId,
+            client_secret: clientSecret,
+            redirect_uri: 'http://localhost:8166/oauth2callback'
+          })
+        });
+        const cbData = await cbRes.json();
+        if (cbData.success) {
+          alert('YouTube 授权成功并已获取 Refresh Token！');
+          await loadConfig();
+        } else {
+          alert('换取 Token 失败: ' + (cbData.detail || '未知错误'));
+        }
+      }
+    } else {
+      alert('获取授权链接失败: ' + (data.detail || '未知错误'));
+    }
+  } catch (err) {
+    alert('请求出错: ' + err.message);
+  }
+}
+
+async function testYouTubeApi() {
+  const badge = document.getElementById('youtubeTestStatusBadge');
+  badge.style.color = 'var(--text-muted)';
+  badge.innerText = '正在测试 YouTube API...';
+
+  const clientId = document.getElementById('youtube_client_id').value.trim();
+  const clientSecret = document.getElementById('youtube_client_secret').value.trim();
+  const refreshToken = document.getElementById('youtube_refresh_token').value.trim();
+
+  try {
+    const res = await fetch('/api/youtube/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      badge.style.color = '#00e676';
+      badge.innerText = `✅ ${data.message}`;
+    } else {
+      badge.style.color = '#ff5252';
+      badge.innerText = `❌ 测试失败: ${data.detail || '无法连接 YouTube'}`;
     }
   } catch (err) {
     badge.style.color = '#ff5252';

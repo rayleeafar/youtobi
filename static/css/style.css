@@ -313,3 +313,63 @@ header {
   gap: 10px;
   cursor: pointer;
 }
+
+/* Target Selector Chips */
+.target-option {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+
+.target-option input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.target-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.target-option input:checked + .target-chip {
+  background: rgba(0, 242, 254, 0.15);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+}
+
+.target-option input[id="target_youtube"]:checked + .target-chip {
+  background: rgba(255, 82, 82, 0.15);
+  border-color: #ff5252;
+  color: #ff5252;
+  box-shadow: 0 0 10px rgba(255, 82, 82, 0.2);
+}
+
+/* Secondary Creation Accordion */
+.secondary-accordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.secondary-accordion summary {
+  list-style: none;
+}
+
+.tag-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
