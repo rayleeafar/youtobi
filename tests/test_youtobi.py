@@ -108,6 +108,40 @@ class TestYoutobi(unittest.TestCase):
             "secondary_watermark_enabled": False
         })
 
+    def test_system_stats_requires_auth_and_shape(self):
+        unauth = TestClient(app)
+        denied = unauth.get("/api/system/stats")
+        self.assertEqual(denied.status_code, 401)
+
+        res = self.client.get("/api/system/stats")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(
+            set(data.keys()),
+            {
+                "hostname", "ip", "cpu_percent", "cpu_count", "load_avg",
+                "memory", "disk", "net", "uptime_seconds", "sampled_at",
+            },
+        )
+        self.assertTrue(data["hostname"])
+        if data["ip"] is not None:
+            self.assertFalse(str(data["ip"]).startswith("127."))
+            self.assertEqual(len(str(data["ip"]).split(".")), 4)
+        self.assertGreaterEqual(data["cpu_percent"], 0)
+        self.assertLessEqual(data["cpu_percent"], 100)
+        self.assertGreaterEqual(data["cpu_count"], 1)
+        self.assertGreater(data["memory"]["total"], 0)
+        self.assertLessEqual(data["memory"]["used"], data["memory"]["total"])
+        self.assertGreaterEqual(data["memory"]["percent"], 0)
+        self.assertLessEqual(data["memory"]["percent"], 100)
+        self.assertGreater(data["disk"]["total"], 0)
+        self.assertGreaterEqual(data["disk"]["percent"], 0)
+        self.assertLessEqual(data["disk"]["percent"], 100)
+        self.assertGreaterEqual(data["net"]["bytes_sent"], 0)
+        self.assertGreaterEqual(data["net"]["bytes_recv"], 0)
+        self.assertGreaterEqual(data["uptime_seconds"], 0)
+        self.assertIsInstance(data["sampled_at"], float)
+
     def test_auth_flow(self):
         unauth_client = TestClient(app)
         res = unauth_client.get("/api/config")

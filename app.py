@@ -1,7 +1,11 @@
 import os
 import logging
+import socket
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+
+import psutil
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,6 +56,67 @@ def is_authenticated(request: Request) -> bool:
     expected_token = _get_auth_token(admin_pwd)
     session_token = request.cookies.get(AUTH_COOKIE_NAME)
     return session_token == expected_token
+
+# Baseline so later non-blocking cpu_percent() calls return a real delta.
+psutil.cpu_percent(interval=None)
+
+
+def _primary_ipv4() -> Optional[str]:
+    """Primary non-loopback IPv4. UDP connect only consults the routing table."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        if ip and not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    for addrs in psutil.net_if_addrs().values():
+        for addr in addrs:
+            if addr.family == socket.AF_INET and addr.address and not addr.address.startswith("127."):
+                return addr.address
+    return None
+
+
+def collect_host_stats() -> Dict[str, Any]:
+    # ponytail: cumulative net counters only; the banner derives rate from the previous poll.
+    cpu = psutil.cpu_percent(interval=None)
+    vm = psutil.virtual_memory()
+    try:
+        disk = psutil.disk_usage("/")
+        disk_mount = "/"
+    except OSError:
+        disk = psutil.disk_usage(os.getcwd())
+        disk_mount = os.getcwd()
+    net = psutil.net_io_counters()
+    load = os.getloadavg() if hasattr(os, "getloadavg") else None
+    mem_used = vm.total - vm.available
+    return {
+        "hostname": socket.gethostname(),
+        "ip": _primary_ipv4(),
+        "cpu_percent": round(cpu, 1),
+        "cpu_count": psutil.cpu_count() or 0,
+        "load_avg": [round(x, 2) for x in load] if load else None,
+        "memory": {
+            "total": vm.total,
+            "used": mem_used,
+            "percent": round(vm.percent, 1),
+        },
+        "disk": {
+            "total": disk.total,
+            "used": disk.used,
+            "percent": round(disk.percent, 1),
+            "mount": disk_mount,
+        },
+        "net": {
+            "bytes_sent": net.bytes_sent,
+            "bytes_recv": net.bytes_recv,
+        },
+        "uptime_seconds": max(0, int(time.time() - psutil.boot_time())),
+        "sampled_at": time.time(),
+    }
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -160,6 +225,15 @@ async def logout():
 @app.get("/", response_class=HTMLResponse)
 async def read_index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
+
+
+@app.get("/api/system/stats")
+def system_stats():
+    try:
+        return collect_host_stats()
+    except Exception:
+        logger.exception("host stats collection failed")
+        raise HTTPException(status_code=503, detail="主机状态暂不可用")
 
 
 @app.post("/api/tasks")
