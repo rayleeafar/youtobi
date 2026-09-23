@@ -373,3 +373,136 @@ header {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
 }
+
+/* Host resource strip */
+.host-banner {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  margin: -0.5rem 0 1.5rem;
+  padding: 0.7rem 1rem;
+  background: var(--panel-bg);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glow);
+}
+
+.host-banner.is-error {
+  border-color: rgba(255, 82, 82, 0.45);
+}
+
+.host-banner-id {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.7rem;
+  min-width: 10rem;
+  font-size: 0.88rem;
+}
+
+.host-flag {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.host-banner-kicker {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #051329;
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+}
+
+.host-banner-muted {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', monospace, sans-serif;
+}
+
+.host-meters {
+  display: flex;
+  flex: 1;
+  gap: 0.9rem;
+  min-width: 240px;
+}
+
+.host-meter {
+  flex: 1;
+  min-width: 88px;
+}
+
+.host-meter-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.host-meter-label span:last-child {
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace, sans-serif;
+}
+
+.host-meter-track {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.host-meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+  transition: width 0.4s ease;
+}
+
+.host-meter[data-level="warn"] .host-meter-fill {
+  background: linear-gradient(90deg, var(--warning), #ff6d00);
+}
+
+.host-meter[data-level="hot"] .host-meter-fill {
+  background: linear-gradient(90deg, var(--error), var(--accent-pink));
+}
+
+.host-meter-sub {
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.host-net {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace, sans-serif;
+  color: var(--accent-cyan);
+}
+
+@media (max-width: 720px) {
+  .host-banner {
+    top: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .host-meters {
+    min-width: 100%;
+  }
+}

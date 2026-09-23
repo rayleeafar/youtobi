@@ -1,7 +1,14 @@
+import ipaddress
 import os
 import logging
+import socket
+import threading
+import time
+import urllib.request
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+
+import psutil
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,6 +59,130 @@ def is_authenticated(request: Request) -> bool:
     expected_token = _get_auth_token(admin_pwd)
     session_token = request.cookies.get(AUTH_COOKIE_NAME)
     return session_token == expected_token
+
+# Baseline so later non-blocking cpu_percent() calls return a real delta.
+psutil.cpu_percent(interval=None)
+
+# ponytail: one process-wide cache. Success lasts 5 min; a miss retries after 60s and keeps the last good value.
+_PUBLIC_IP_TTL = 300
+_PUBLIC_IP_RETRY = 60
+_public_ip_lock = threading.Lock()
+_public_ip_cache: Dict[str, Any] = {"ip": None, "country": None, "expires": 0.0}
+
+
+def _is_public_ipv4(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip.strip())
+    except ValueError:
+        return False
+    return addr.version == 4 and bool(addr.is_global)
+
+
+def _is_iso_country(code: str) -> bool:
+    return len(code) == 2 and code.isalpha()
+
+
+def _http_get(url: str, timeout: float = 2.0) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "youtobi"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(8192).decode("utf-8", "replace")
+
+
+def _fetch_public_ip() -> Tuple[Optional[str], Optional[str]]:
+    ip = None
+    country = None
+    try:
+        fields: Dict[str, str] = {}
+        for line in _http_get("https://1.1.1.1/cdn-cgi/trace").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                fields[key.strip()] = value.strip()
+        candidate = fields.get("ip", "")
+        loc = fields.get("loc", "").upper()
+        if _is_public_ipv4(candidate):
+            ip = candidate
+            if _is_iso_country(loc):
+                country = loc
+    except Exception:
+        logger.info("public ip trace lookup failed")
+    if not ip:
+        try:
+            candidate = _http_get("https://api.ipify.org").strip()
+        except Exception:
+            logger.info("public ip lookup failed")
+            return None, None
+        if not _is_public_ipv4(candidate):
+            return None, None
+        ip = candidate
+    if not country:
+        try:
+            code = _http_get(f"https://ipapi.co/{ip}/country/").strip().upper()
+            if _is_iso_country(code):
+                country = code
+        except Exception:
+            logger.info("public ip geo lookup failed")
+    return ip, country
+
+
+def _cached_public_ip() -> Tuple[Optional[str], Optional[str]]:
+    now = time.time()
+    with _public_ip_lock:
+        if now < _public_ip_cache["expires"]:
+            return _public_ip_cache["ip"], _public_ip_cache["country"]
+    try:
+        ip, country = _fetch_public_ip()
+    except Exception:
+        logger.info("public ip lookup failed")
+        ip, country = None, None
+    with _public_ip_lock:
+        if ip:
+            _public_ip_cache["ip"] = ip
+            _public_ip_cache["country"] = country
+            _public_ip_cache["expires"] = time.time() + _PUBLIC_IP_TTL
+        else:
+            _public_ip_cache["expires"] = time.time() + _PUBLIC_IP_RETRY
+        return _public_ip_cache["ip"], _public_ip_cache["country"]
+
+
+def collect_host_stats() -> Dict[str, Any]:
+    # ponytail: cumulative net counters only; the banner derives rate from the previous poll.
+    cpu = psutil.cpu_percent(interval=None)
+    vm = psutil.virtual_memory()
+    try:
+        disk = psutil.disk_usage("/")
+        disk_mount = "/"
+    except OSError:
+        disk = psutil.disk_usage(os.getcwd())
+        disk_mount = os.getcwd()
+    net = psutil.net_io_counters()
+    load = os.getloadavg() if hasattr(os, "getloadavg") else None
+    mem_used = vm.total - vm.available
+    public_ip, country = _cached_public_ip()
+    return {
+        "hostname": socket.gethostname(),
+        "ip": public_ip,
+        "country": country,
+        "cpu_percent": round(cpu, 1),
+        "cpu_count": psutil.cpu_count() or 0,
+        "load_avg": [round(x, 2) for x in load] if load else None,
+        "memory": {
+            "total": vm.total,
+            "used": mem_used,
+            "percent": round(vm.percent, 1),
+        },
+        "disk": {
+            "total": disk.total,
+            "used": disk.used,
+            "percent": round(disk.percent, 1),
+            "mount": disk_mount,
+        },
+        "net": {
+            "bytes_sent": net.bytes_sent,
+            "bytes_recv": net.bytes_recv,
+        },
+        "uptime_seconds": max(0, int(time.time() - psutil.boot_time())),
+        "sampled_at": time.time(),
+    }
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -160,6 +291,15 @@ async def logout():
 @app.get("/", response_class=HTMLResponse)
 async def read_index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
+
+
+@app.get("/api/system/stats")
+def system_stats():
+    try:
+        return collect_host_stats()
+    except Exception:
+        logger.exception("host stats collection failed")
+        raise HTTPException(status_code=503, detail="主机状态暂不可用")
 
 
 @app.post("/api/tasks")
