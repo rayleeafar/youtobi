@@ -30,6 +30,35 @@
       </div>
     </header>
 
+    <section class="host-banner" id="hostBanner" aria-live="polite" aria-busy="true">
+      <div class="host-banner-id">
+        <span class="host-banner-kicker">主机</span>
+        <span id="hostIdentity">读取中…</span>
+        <span id="hostUptime" class="host-banner-muted"></span>
+      </div>
+      <div class="host-meters">
+        <div class="host-meter" id="hostCpuMeter" data-level="ok">
+          <div class="host-meter-label"><span>CPU</span><span id="hostCpuVal">—</span></div>
+          <div class="host-meter-track"><div class="host-meter-fill" id="hostCpuBar"></div></div>
+          <div class="host-meter-sub" id="hostCpuSub"></div>
+        </div>
+        <div class="host-meter" id="hostMemMeter" data-level="ok">
+          <div class="host-meter-label"><span>内存</span><span id="hostMemVal">—</span></div>
+          <div class="host-meter-track"><div class="host-meter-fill" id="hostMemBar"></div></div>
+          <div class="host-meter-sub" id="hostMemSub"></div>
+        </div>
+        <div class="host-meter" id="hostDiskMeter" data-level="ok">
+          <div class="host-meter-label"><span>磁盘</span><span id="hostDiskVal">—</span></div>
+          <div class="host-meter-track"><div class="host-meter-fill" id="hostDiskBar"></div></div>
+          <div class="host-meter-sub" id="hostDiskSub"></div>
+        </div>
+      </div>
+      <div class="host-net">
+        <span id="hostNetDown" title="下行带宽">↓ —</span>
+        <span id="hostNetUp" title="上行带宽">↑ —</span>
+        <span id="hostUpdated" class="host-banner-muted"></span>
+      </div>
+    </section>
 
     <!-- Task Submission Card -->
     <div class="form-card">
