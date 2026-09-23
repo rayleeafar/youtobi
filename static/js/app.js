@@ -1,10 +1,144 @@
 let activePollInterval = null;
+let hostStatsTimer = null;
+let hostStatsKickoff = null;
+let hostStatsPrev = null;
+const HOST_STATS_INTERVAL_MS = 15000;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   loadTasks();
   activePollInterval = setInterval(loadTasks, 3000);
+  refreshHostStats();
+  // Second sample shortly after load so bandwidth has a delta before the 15s cadence.
+  hostStatsKickoff = setTimeout(refreshHostStats, 1500);
+  hostStatsTimer = setInterval(refreshHostStats, HOST_STATS_INTERVAL_MS);
 });
+
+window.addEventListener('pagehide', () => {
+  if (activePollInterval) clearInterval(activePollInterval);
+  if (hostStatsTimer) clearInterval(hostStatsTimer);
+  if (hostStatsKickoff) clearTimeout(hostStatsKickoff);
+});
+
+function formatBytes(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = n;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return (i === 0 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[i];
+}
+
+function formatRate(bytesPerSec) {
+  if (bytesPerSec == null || !Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '—';
+  const bits = bytesPerSec * 8;
+  if (bits >= 1e6) return (bits / 1e6).toFixed(bits >= 1e7 ? 0 : 1) + ' Mbps';
+  if (bytesPerSec >= 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+  return bytesPerSec.toFixed(0) + ' B/s';
+}
+
+function formatUptime(seconds) {
+  const sec = Math.max(0, Math.floor(seconds || 0));
+  const days = Math.floor(sec / 86400);
+  const hours = Math.floor((sec % 86400) / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  if (days > 0) return `已运行 ${days}天 ${hours}小时`;
+  if (hours > 0) return `已运行 ${hours}小时 ${mins}分`;
+  return `已运行 ${mins}分`;
+}
+
+function meterLevel(percent) {
+  if (percent >= 90) return 'hot';
+  if (percent >= 70) return 'warn';
+  return 'ok';
+}
+
+function setMeter(meterId, barId, valId, subId, percent, subText) {
+  const meter = document.getElementById(meterId);
+  const bar = document.getElementById(barId);
+  const val = document.getElementById(valId);
+  const sub = document.getElementById(subId);
+  const clamped = Math.max(0, Math.min(100, percent));
+  if (meter) meter.dataset.level = meterLevel(clamped);
+  if (bar) bar.style.width = clamped + '%';
+  if (val) val.textContent = clamped.toFixed(0) + '%';
+  if (sub) sub.textContent = subText;
+}
+
+function renderHostStats(data) {
+  const banner = document.getElementById('hostBanner');
+  if (banner) {
+    banner.classList.remove('is-error');
+    banner.setAttribute('aria-busy', 'false');
+  }
+  const identity = document.getElementById('hostIdentity');
+  if (identity) {
+    identity.textContent = data.ip ? `${data.hostname} · ${data.ip}` : data.hostname;
+  }
+  const uptime = document.getElementById('hostUptime');
+  if (uptime) uptime.textContent = formatUptime(data.uptime_seconds);
+
+  const load = data.load_avg && data.load_avg.length ? `负载 ${data.load_avg[0]}` : '';
+  const cores = data.cpu_count ? `${data.cpu_count} 核` : '';
+  setMeter('hostCpuMeter', 'hostCpuBar', 'hostCpuVal', 'hostCpuSub', data.cpu_percent, [cores, load].filter(Boolean).join(' · '));
+  setMeter(
+    'hostMemMeter', 'hostMemBar', 'hostMemVal', 'hostMemSub',
+    data.memory.percent,
+    `${formatBytes(data.memory.used)} / ${formatBytes(data.memory.total)}`
+  );
+  setMeter(
+    'hostDiskMeter', 'hostDiskBar', 'hostDiskVal', 'hostDiskSub',
+    data.disk.percent,
+    `${formatBytes(data.disk.used)} / ${formatBytes(data.disk.total)}`
+  );
+
+  let down = null;
+  let up = null;
+  if (hostStatsPrev && data.net && hostStatsPrev.net) {
+    const dt = data.sampled_at - hostStatsPrev.sampled_at;
+    if (dt > 0.2) {
+      const recv = (data.net.bytes_recv - hostStatsPrev.net.bytes_recv) / dt;
+      const sent = (data.net.bytes_sent - hostStatsPrev.net.bytes_sent) / dt;
+      if (recv >= 0 && sent >= 0) {
+        down = recv;
+        up = sent;
+      }
+    }
+  }
+  const downEl = document.getElementById('hostNetDown');
+  const upEl = document.getElementById('hostNetUp');
+  if (downEl) downEl.textContent = down == null ? '↓ 采样中' : `↓ ${formatRate(down)}`;
+  if (upEl) upEl.textContent = up == null ? '↑ 采样中' : `↑ ${formatRate(up)}`;
+
+  const updated = document.getElementById('hostUpdated');
+  if (updated) {
+    const stamp = new Date((data.sampled_at || Date.now() / 1000) * 1000);
+    updated.textContent = stamp.toLocaleTimeString();
+  }
+  hostStatsPrev = data;
+}
+
+async function refreshHostStats() {
+  const banner = document.getElementById('hostBanner');
+  if (!banner) return;
+  try {
+    const res = await fetch('/api/system/stats');
+    if (!res.ok) throw new Error('stats unavailable');
+    renderHostStats(await res.json());
+  } catch (err) {
+    banner.classList.add('is-error');
+    banner.setAttribute('aria-busy', 'false');
+    const updated = document.getElementById('hostUpdated');
+    if (updated) updated.textContent = '更新失败';
+    if (!hostStatsPrev) {
+      const identity = document.getElementById('hostIdentity');
+      if (identity) identity.textContent = '主机状态暂不可用';
+    }
+  }
+}
 
 function openSettingsModal() {
   document.getElementById('settingsModal').classList.add('active');
