@@ -108,25 +108,44 @@ class TestYoutobi(unittest.TestCase):
             "secondary_watermark_enabled": False
         })
 
+    def _reset_public_ip_cache(self):
+        import app as app_module
+        app_module._public_ip_cache.update(ip=None, country=None, expires=0.0)
+
     def test_system_stats_requires_auth_and_shape(self):
+        from unittest.mock import patch
+
         unauth = TestClient(app)
         denied = unauth.get("/api/system/stats")
         self.assertEqual(denied.status_code, 401)
 
-        res = self.client.get("/api/system/stats")
+        self._reset_public_ip_cache()
+        calls = []
+
+        def fake_get(url, timeout=2.0):
+            calls.append(url)
+            if "cdn-cgi/trace" in url:
+                return "ip=8.8.8.8\nloc=US\n"
+            raise AssertionError(url)
+
+        with patch("app._http_get", side_effect=fake_get):
+            res = self.client.get("/api/system/stats")
+            again = self.client.get("/api/system/stats")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(
             set(data.keys()),
             {
-                "hostname", "ip", "cpu_percent", "cpu_count", "load_avg",
+                "hostname", "ip", "country", "cpu_percent", "cpu_count", "load_avg",
                 "memory", "disk", "net", "uptime_seconds", "sampled_at",
             },
         )
+        self.assertEqual(data["ip"], "8.8.8.8")
+        self.assertEqual(data["country"], "US")
+        self.assertEqual(again.json()["ip"], "8.8.8.8")
+        self.assertEqual(again.json()["country"], "US")
+        self.assertEqual(calls, ["https://1.1.1.1/cdn-cgi/trace"])
         self.assertTrue(data["hostname"])
-        if data["ip"] is not None:
-            self.assertFalse(str(data["ip"]).startswith("127."))
-            self.assertEqual(len(str(data["ip"]).split(".")), 4)
         self.assertGreaterEqual(data["cpu_percent"], 0)
         self.assertLessEqual(data["cpu_percent"], 100)
         self.assertGreaterEqual(data["cpu_count"], 1)
@@ -141,6 +160,44 @@ class TestYoutobi(unittest.TestCase):
         self.assertGreaterEqual(data["net"]["bytes_recv"], 0)
         self.assertGreaterEqual(data["uptime_seconds"], 0)
         self.assertIsInstance(data["sampled_at"], float)
+
+    def test_system_stats_public_ip_fallback(self):
+        from unittest.mock import patch
+        import app as app_module
+
+        self._reset_public_ip_cache()
+
+        def private_then_public(url, timeout=2.0):
+            if "cdn-cgi/trace" in url:
+                return "ip=172.16.0.5\nloc=US\n"
+            if "ipify" in url:
+                return "1.1.1.1"
+            if "ipapi.co" in url:
+                return "de"
+            raise AssertionError(url)
+
+        with patch("app._http_get", side_effect=private_then_public):
+            res = self.client.get("/api/system/stats")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["ip"], "1.1.1.1")
+        self.assertEqual(res.json()["country"], "DE")
+        self.assertGreaterEqual(res.json()["cpu_percent"], 0)
+
+        app_module._public_ip_cache["expires"] = 0.0
+        with patch("app._http_get", side_effect=OSError("down")):
+            kept = self.client.get("/api/system/stats")
+        self.assertEqual(kept.status_code, 200)
+        self.assertEqual(kept.json()["ip"], "1.1.1.1")
+        self.assertEqual(kept.json()["country"], "DE")
+        self.assertIn("memory", kept.json())
+
+        self._reset_public_ip_cache()
+        with patch("app._http_get", side_effect=OSError("down")):
+            empty = self.client.get("/api/system/stats")
+        self.assertEqual(empty.status_code, 200)
+        self.assertIsNone(empty.json()["ip"])
+        self.assertIsNone(empty.json()["country"])
+        self.assertIn("disk", empty.json())
 
     def test_auth_flow(self):
         unauth_client = TestClient(app)

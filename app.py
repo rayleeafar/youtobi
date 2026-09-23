@@ -1,7 +1,10 @@
+import ipaddress
 import os
 import logging
 import socket
+import threading
 import time
+import urllib.request
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -60,24 +63,85 @@ def is_authenticated(request: Request) -> bool:
 # Baseline so later non-blocking cpu_percent() calls return a real delta.
 psutil.cpu_percent(interval=None)
 
+# ponytail: one process-wide cache. Success lasts 5 min; a miss retries after 60s and keeps the last good value.
+_PUBLIC_IP_TTL = 300
+_PUBLIC_IP_RETRY = 60
+_public_ip_lock = threading.Lock()
+_public_ip_cache: Dict[str, Any] = {"ip": None, "country": None, "expires": 0.0}
 
-def _primary_ipv4() -> Optional[str]:
-    """Primary non-loopback IPv4. UDP connect only consults the routing table."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def _is_public_ipv4(ip: str) -> bool:
     try:
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-        if ip and not ip.startswith("127."):
-            return ip
-    except OSError:
-        pass
-    finally:
-        sock.close()
-    for addrs in psutil.net_if_addrs().values():
-        for addr in addrs:
-            if addr.family == socket.AF_INET and addr.address and not addr.address.startswith("127."):
-                return addr.address
-    return None
+        addr = ipaddress.ip_address(ip.strip())
+    except ValueError:
+        return False
+    return addr.version == 4 and bool(addr.is_global)
+
+
+def _is_iso_country(code: str) -> bool:
+    return len(code) == 2 and code.isalpha()
+
+
+def _http_get(url: str, timeout: float = 2.0) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "youtobi"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(8192).decode("utf-8", "replace")
+
+
+def _fetch_public_ip() -> Tuple[Optional[str], Optional[str]]:
+    ip = None
+    country = None
+    try:
+        fields: Dict[str, str] = {}
+        for line in _http_get("https://1.1.1.1/cdn-cgi/trace").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                fields[key.strip()] = value.strip()
+        candidate = fields.get("ip", "")
+        loc = fields.get("loc", "").upper()
+        if _is_public_ipv4(candidate):
+            ip = candidate
+            if _is_iso_country(loc):
+                country = loc
+    except Exception:
+        logger.info("public ip trace lookup failed")
+    if not ip:
+        try:
+            candidate = _http_get("https://api.ipify.org").strip()
+        except Exception:
+            logger.info("public ip lookup failed")
+            return None, None
+        if not _is_public_ipv4(candidate):
+            return None, None
+        ip = candidate
+    if not country:
+        try:
+            code = _http_get(f"https://ipapi.co/{ip}/country/").strip().upper()
+            if _is_iso_country(code):
+                country = code
+        except Exception:
+            logger.info("public ip geo lookup failed")
+    return ip, country
+
+
+def _cached_public_ip() -> Tuple[Optional[str], Optional[str]]:
+    now = time.time()
+    with _public_ip_lock:
+        if now < _public_ip_cache["expires"]:
+            return _public_ip_cache["ip"], _public_ip_cache["country"]
+    try:
+        ip, country = _fetch_public_ip()
+    except Exception:
+        logger.info("public ip lookup failed")
+        ip, country = None, None
+    with _public_ip_lock:
+        if ip:
+            _public_ip_cache["ip"] = ip
+            _public_ip_cache["country"] = country
+            _public_ip_cache["expires"] = time.time() + _PUBLIC_IP_TTL
+        else:
+            _public_ip_cache["expires"] = time.time() + _PUBLIC_IP_RETRY
+        return _public_ip_cache["ip"], _public_ip_cache["country"]
 
 
 def collect_host_stats() -> Dict[str, Any]:
@@ -93,9 +157,11 @@ def collect_host_stats() -> Dict[str, Any]:
     net = psutil.net_io_counters()
     load = os.getloadavg() if hasattr(os, "getloadavg") else None
     mem_used = vm.total - vm.available
+    public_ip, country = _cached_public_ip()
     return {
         "hostname": socket.gethostname(),
-        "ip": _primary_ipv4(),
+        "ip": public_ip,
+        "country": country,
         "cpu_percent": round(cpu, 1),
         "cpu_count": psutil.cpu_count() or 0,
         "load_avg": [round(x, 2) for x in load] if load else None,
