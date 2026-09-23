@@ -68,15 +68,29 @@ function setMeter(meterId, barId, valId, subId, percent, subText) {
   if (sub) sub.textContent = subText;
 }
 
+function countryFlag(code) {
+  if (!code || !/^[a-zA-Z]{2}$/.test(code)) return '';
+  const base = 0x1F1E6;
+  const upper = code.toUpperCase();
+  return String.fromCodePoint(base + upper.charCodeAt(0) - 65, base + upper.charCodeAt(1) - 65);
+}
+
 function renderHostStats(data) {
   const banner = document.getElementById('hostBanner');
   if (banner) {
     banner.classList.remove('is-error');
     banner.setAttribute('aria-busy', 'false');
   }
+  const flagEl = document.getElementById('hostFlag');
+  const flag = countryFlag(data.country);
+  if (flagEl) {
+    flagEl.textContent = flag;
+    flagEl.hidden = !flag;
+    flagEl.title = data.country || '';
+  }
   const identity = document.getElementById('hostIdentity');
   if (identity) {
-    identity.textContent = data.ip ? `${data.hostname} · ${data.ip}` : data.hostname;
+    identity.textContent = `${data.hostname} · ${data.ip || '—'}`;
   }
   const uptime = document.getElementById('hostUptime');
   if (uptime) uptime.textContent = formatUptime(data.uptime_seconds);
