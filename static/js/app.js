@@ -462,6 +462,52 @@ async function cancelTask(taskId) {
   }
 }
 
+const copiedUrlUntil = {};
+
+async function copyTaskUrl(button) {
+  const url = button.dataset.copyUrl || '';
+  const taskId = button.dataset.taskId || '';
+  if (!url) return;
+  try {
+    await writeClipboard(url);
+  } catch (err) {
+    button.textContent = '复制失败';
+    setTimeout(() => {
+      if (button.isConnected) button.textContent = '📋 复制链接';
+    }, 1500);
+    return;
+  }
+  const until = Date.now() + 1500;
+  copiedUrlUntil[taskId] = until;
+  button.textContent = '✅ 已复制';
+  setTimeout(() => {
+    if (copiedUrlUntil[taskId] !== until) return;
+    delete copiedUrlUntil[taskId];
+    if (button.isConnected) button.textContent = '📋 复制链接';
+  }, 1500);
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (err) {
+      // ponytail: clipboard API rejects outside a secure context or without permission
+    }
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.left = '-9999px';
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  if (!ok) throw new Error('copy failed');
+}
+
 async function retryTask(taskId) {
   try {
     const res = await fetch(`/api/tasks/${taskId}/retry`, { method: 'POST' });
@@ -551,10 +597,46 @@ function renderTaskCard(task) {
     'CANCELLED': '已取消'
   };
 
+  const stageLabels = {
+    cookie_sync: '同步 Cookie',
+    metadata: '读取元数据',
+    download: '下载视频',
+    subtitles: '字幕',
+    edit: '剪辑/烧录',
+    llm: 'AI 简介',
+    bilibili_upload: '上传 B站',
+    youtube_upload: '上传 YouTube',
+    done: '已完成'
+  };
   const logsHtml = (task.logs || []).map(l => `<div class="log-entry">${escapeHtml(l)}</div>`).join('');
   const isRunning = ['PENDING', 'DOWNLOADING', 'SUBTITLE_PROCESSING', 'LLM_REGENERATION', 'UPLOADING'].includes(task.status);
   const isStopped = ['PAUSED', 'STOPPED', 'CANCELLED', 'FAILED'].includes(task.status);
+  const doneStages = (task.completed_stages || [])
+    .filter(stage => stage !== 'cookie_sync')
+    .map(stage => stageLabels[stage] || stage);
+  const resumeReady = doneStages.length > 0 && isStopped;
+  const stageHintParts = [];
+  if (task.current_stage) {
+    stageHintParts.push(`当前阶段：${stageLabels[task.current_stage] || task.current_stage}`);
+  }
+  if (doneStages.length) {
+    stageHintParts.push(`已完成 ${doneStages.join(' → ')}`);
+  }
+  if (resumeReady) {
+    stageHintParts.push('重试会先同步 CookieCloud，再从第一个未完成阶段继续');
+  }
+  const stageHint = stageHintParts.length
+    ? `<div style="font-size: 0.8rem; color: var(--text-muted); margin: -0.25rem 0 0.75rem;">${escapeHtml(stageHintParts.join(' · '))}</div>`
+    : '';
+  const lastError = task.last_error || task.error_message;
+  const errorLine = lastError && isStopped
+    ? `<div style="font-size: 0.8rem; color: #ff8a80; margin: -0.35rem 0 0.75rem;">上次错误：${escapeHtml(lastError)}</div>`
+    : '';
   const taskTitle = escapeHtml(task.final_title || task.youtube_info?.title || task.youtube_url);
+  const copyLabel = copiedUrlUntil[task.id] > Date.now() ? '✅ 已复制' : '📋 复制链接';
+  const copyButton = task.youtube_url
+    ? `<button type="button" class="btn btn-secondary" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; flex: 0 0 auto;" data-task-id="${escapeHtml(task.id)}" data-copy-url="${escapeHtml(task.youtube_url)}" onclick="copyTaskUrl(this)">${copyLabel}</button>`
+    : '';
 
   // Target platform badges
   const targets = task.upload_targets || ['bilibili'];
@@ -605,7 +687,10 @@ function renderTaskCard(task) {
             ${targetBadgesHtml}
             ${secBadgesHtml}
           </div>
-          <h3 style="font-size: 1.1rem; margin-top: 2px;">${taskTitle}</h3>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px;">
+            <h3 style="font-size: 1.1rem; margin: 0;">${taskTitle}</h3>
+            ${copyButton}
+          </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
           ${task.skip_subtitles ? `<span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #eab308; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">⚡ 跳过字幕</span>` : ''}
@@ -616,6 +701,8 @@ function renderTaskCard(task) {
       <div class="progress-bar-container">
         <div class="progress-bar-fill" style="width: ${task.progress}%;"></div>
       </div>
+      ${stageHint}
+      ${errorLine}
 
       <!-- Action Buttons Row -->
       <div style="display: flex; gap: 8px; margin-bottom: 1rem; flex-wrap: wrap;">
@@ -628,7 +715,7 @@ function renderTaskCard(task) {
           ⚡ ${task.skip_subtitles ? '已跳过字幕' : '跳过字幕'}
         </button>
         
-        <button class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="retryTask('${task.id}')">🔄 重试</button>
+        <button class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" onclick="retryTask('${task.id}')">🔄 ${resumeReady ? '从断点重试' : '重试'}</button>
         <button class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; border-color: rgba(255, 82, 82, 0.4); color: #ff5252;" onclick="deleteTask('${task.id}')">🗑️ 删除</button>
       </div>
 

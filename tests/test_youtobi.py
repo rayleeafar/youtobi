@@ -863,5 +863,301 @@ Second subtitle line
             self.assertIn("YouTube 账号授权成功", oauth_page_res.text)
             self.assertEqual(config_manager.get("youtube_refresh_token"), "rt_test_page_999")
 
+    def _config_snapshot(self):
+        keys = (
+            "cookiecloud_url", "cookiecloud_uuid", "cookiecloud_password",
+            "youtube_cookies", "bilibili_sessdata", "bilibili_bili_jct", "bilibili_dedeuserid",
+            "downloads_dir", "auto_delete_after_upload", "skip_subtitles", "llm_enabled",
+        )
+        return {key: config_manager.get(key) for key in keys}
+
+    def test_retry_resumes_completed_stages_and_syncs_cookies(self):
+        from unittest.mock import patch, MagicMock
+        from services.task_manager import Task
+        import tempfile
+
+        snapshot = self._config_snapshot()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_manager.update({
+                "cookiecloud_url": "https://cc.example.com",
+                "cookiecloud_uuid": "uuid-resume",
+                "cookiecloud_password": "pwd-resume",
+                "youtube_cookies": "stale-yt",
+                "bilibili_sessdata": "stale-sess",
+                "downloads_dir": tmpdir,
+                "auto_delete_after_upload": False,
+                "skip_subtitles": False,
+                "llm_enabled": False,
+            })
+            try:
+                task = Task(
+                    "resume1",
+                    "https://youtu.be/resume1",
+                    skip_subtitles=True,
+                    upload_targets=["bilibili", "youtube"],
+                )
+                task._manager = task_manager
+                task_manager.tasks[task.id] = task
+                video = Path(tmpdir) / task.id / "vid.mp4"
+                info = {
+                    "id": "resume1",
+                    "url": task.youtube_url,
+                    "title": "Resume Title",
+                    "description": "Desc",
+                    "language": "zh",
+                    "is_chinese": True,
+                }
+                downloads = {"n": 0}
+
+                def fake_download(url, task_id):
+                    downloads["n"] += 1
+                    video.parent.mkdir(parents=True, exist_ok=True)
+                    video.write_bytes(b"video-bytes")
+                    return video, None, info
+
+                yt_seen = []
+                bili_seen = []
+
+                def bili_factory(sessdata, bili_jct, dedeuserid, extra_cookies=None):
+                    bili_seen.append(dict(extra_cookies or {}))
+                    service = MagicMock()
+                    service.upload_video.return_value = {"bvid": "BV_RESUME"}
+                    return service
+
+                def yt_factory(client_id="", client_secret="", refresh_token=""):
+                    service = MagicMock()
+
+                    def upload_video(**kwargs):
+                        yt_seen.append(config_manager.get("youtube_cookies"))
+                        if len(yt_seen) == 1:
+                            raise RuntimeError("yt down")
+                        return {"video_id": "yt123", "url": "https://www.youtube.com/watch?v=yt123"}
+
+                    service.upload_video.side_effect = upload_video
+                    return service
+
+                with patch("services.task_manager.CookieCloudService") as mock_cc_cls, \
+                     patch("services.task_manager.YouTubeService") as mock_yt_cls, \
+                     patch("services.task_manager.BilibiliService", side_effect=bili_factory), \
+                     patch("services.task_manager.YouTubeUploaderService", side_effect=yt_factory):
+                    mock_cc_cls.return_value.fetch_all_synced_cookies.side_effect = [
+                        ({"SESSDATA": "sess-1", "bili_jct": "jct-1", "DedeUserID": "11"}, "yt-cookie-1"),
+                        ({"SESSDATA": "sess-2", "bili_jct": "jct-2", "DedeUserID": "22"}, "yt-cookie-2"),
+                    ]
+                    mock_yt = mock_yt_cls.return_value
+                    mock_yt.extract_info.return_value = info
+                    mock_yt.download_video_and_subtitles.side_effect = fake_download
+
+                    task_manager._run_task_pipeline(task)
+                    self.assertEqual(task.status, "FAILED")
+                    self.assertIn("download", task.completed_stages)
+                    self.assertIn("bilibili_upload", task.completed_stages)
+                    self.assertNotIn("youtube_upload", task.completed_stages)
+                    self.assertEqual(downloads["n"], 1)
+                    self.assertEqual(mock_cc_cls.return_value.fetch_all_synced_cookies.call_count, 1)
+
+                    saved = json.loads(task_manager.file_path.read_text(encoding="utf-8"))
+                    reloaded = Task.from_dict(saved[task.id])
+                    reloaded._manager = task_manager
+                    task_manager.tasks[task.id] = reloaded
+                    self.assertEqual(reloaded.stage_artifacts["download"]["video_path"], str(video))
+                    self.assertEqual(reloaded.bvid, "BV_RESUME")
+
+                    task_manager._run_task_pipeline(reloaded, resume=True)
+
+                self.assertEqual(downloads["n"], 1)
+                self.assertEqual(mock_yt.extract_info.call_count, 1)
+                self.assertEqual(len(bili_seen), 1)
+                self.assertEqual(bili_seen[0].get("SESSDATA"), "sess-1")
+                self.assertEqual(yt_seen, ["yt-cookie-1", "yt-cookie-2"])
+                self.assertEqual(config_manager.get("bilibili_sessdata"), "sess-2")
+                self.assertEqual(reloaded.status, "COMPLETED")
+                self.assertEqual(reloaded.youtube_video_id, "yt123")
+                self.assertTrue(any("Skipping download" in line for line in reloaded.logs))
+                self.assertTrue(any("Skipping Bilibili upload" in line for line in reloaded.logs))
+                self.assertTrue(any("Resume requested" in line for line in reloaded.logs))
+            finally:
+                task_manager.tasks.pop("resume1", None)
+                config_manager.update(snapshot)
+
+    def test_retry_redownloads_corrupt_video(self):
+        from unittest.mock import patch, MagicMock
+        from services.task_manager import Task
+        import tempfile
+
+        snapshot = self._config_snapshot()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_manager.update({
+                "cookiecloud_url": "https://cc.example.com",
+                "cookiecloud_uuid": "uuid-resume",
+                "cookiecloud_password": "pwd-resume",
+                "downloads_dir": tmpdir,
+                "auto_delete_after_upload": False,
+                "skip_subtitles": False,
+                "llm_enabled": False,
+            })
+            try:
+                task = Task("resume2", "https://youtu.be/resume2", skip_subtitles=True)
+                task._manager = task_manager
+                task_manager.tasks[task.id] = task
+                video = Path(tmpdir) / task.id / "vid.mp4"
+                info = {"id": "resume2", "url": task.youtube_url, "title": "Corrupt", "description": "", "language": "zh", "is_chinese": True}
+                downloads = {"n": 0}
+                uploads = {"n": 0}
+
+                def fake_download(url, task_id):
+                    downloads["n"] += 1
+                    video.parent.mkdir(parents=True, exist_ok=True)
+                    video.write_bytes(b"video-bytes")
+                    return video, None, info
+
+                def bili_factory(*args, **kwargs):
+                    service = MagicMock()
+
+                    def upload_video(**upload_kwargs):
+                        uploads["n"] += 1
+                        if uploads["n"] == 1:
+                            raise RuntimeError("bili down")
+                        return {"bvid": "BV_AGAIN"}
+
+                    service.upload_video.side_effect = upload_video
+                    return service
+
+                with patch("services.task_manager.CookieCloudService") as mock_cc_cls, \
+                     patch("services.task_manager.YouTubeService") as mock_yt_cls, \
+                     patch("services.task_manager.BilibiliService", side_effect=bili_factory):
+                    mock_cc_cls.return_value.fetch_all_synced_cookies.return_value = (
+                        {"SESSDATA": "sess-ok", "bili_jct": "jct", "DedeUserID": "1"},
+                        "yt-ok",
+                    )
+                    mock_yt_cls.return_value.extract_info.return_value = info
+                    mock_yt_cls.return_value.download_video_and_subtitles.side_effect = fake_download
+
+                    task_manager._run_task_pipeline(task)
+                    self.assertEqual(task.status, "FAILED")
+                    self.assertIn("download", task.completed_stages)
+                    self.assertTrue(video.stat().st_size > 0)
+                    video.write_bytes(b"")
+
+                    task_manager._run_task_pipeline(task, resume=True)
+
+                self.assertEqual(downloads["n"], 2)
+                self.assertEqual(mock_cc_cls.return_value.fetch_all_synced_cookies.call_count, 2)
+                self.assertEqual(uploads["n"], 2)
+                self.assertEqual(task.status, "COMPLETED")
+                self.assertGreater(video.stat().st_size, 0)
+                self.assertGreaterEqual(sum(1 for line in task.logs if "Downloaded video file" in line), 2)
+            finally:
+                task_manager.tasks.pop("resume2", None)
+                config_manager.update(snapshot)
+
+    def test_retry_cookie_sync_failure_stops_before_pipeline(self):
+        from unittest.mock import patch, MagicMock
+        from services.task_manager import Task
+        import tempfile
+
+        snapshot = self._config_snapshot()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_manager.update({
+                "cookiecloud_url": "https://cc.example.com",
+                "cookiecloud_uuid": "uuid-resume",
+                "cookiecloud_password": "pwd-resume",
+                "youtube_cookies": "stale-yt",
+                "bilibili_sessdata": "stale-sess",
+                "downloads_dir": tmpdir,
+                "auto_delete_after_upload": False,
+                "skip_subtitles": False,
+                "llm_enabled": False,
+            })
+            try:
+                task = Task("resume3", "https://youtu.be/resume3", skip_subtitles=True)
+                task._manager = task_manager
+                task_manager.tasks[task.id] = task
+                video = Path(tmpdir) / task.id / "vid.mp4"
+                info = {"id": "resume3", "url": task.youtube_url, "title": "Sync Fail", "description": "", "language": "zh", "is_chinese": True}
+
+                def fake_download(url, task_id):
+                    video.parent.mkdir(parents=True, exist_ok=True)
+                    video.write_bytes(b"video-bytes")
+                    return video, None, info
+
+                with patch("services.task_manager.CookieCloudService") as mock_cc_cls, \
+                     patch("services.task_manager.YouTubeService") as mock_yt_cls, \
+                     patch("services.task_manager.BilibiliService") as mock_bili_cls:
+                    mock_cc_cls.return_value.fetch_all_synced_cookies.side_effect = [
+                        ({"SESSDATA": "sess-1", "bili_jct": "jct-1", "DedeUserID": "1"}, "yt-cookie-1"),
+                        RuntimeError("cloud down"),
+                    ]
+                    mock_yt = mock_yt_cls.return_value
+                    mock_yt.extract_info.return_value = info
+                    mock_yt.download_video_and_subtitles.side_effect = fake_download
+                    mock_bili_cls.return_value.upload_video.side_effect = RuntimeError("bili down")
+
+                    task_manager._run_task_pipeline(task)
+                    self.assertEqual(task.status, "FAILED")
+                    video.unlink()
+
+                    task_manager._run_task_pipeline(task, resume=True)
+
+                self.assertEqual(mock_yt.download_video_and_subtitles.call_count, 1)
+                self.assertEqual(mock_yt.extract_info.call_count, 1)
+                self.assertEqual(mock_bili_cls.return_value.upload_video.call_count, 1)
+                self.assertEqual(task.status, "FAILED")
+                self.assertEqual(task.current_stage, "cookie_sync")
+                self.assertIn("CookieCloud", task.last_error or "")
+                self.assertEqual(config_manager.get("youtube_cookies"), "yt-cookie-1")
+            finally:
+                task_manager.tasks.pop("resume3", None)
+                config_manager.update(snapshot)
+
+    def test_retry_api_keeps_artifacts_and_fresh_tasks_do_not_resume(self):
+        from unittest.mock import patch
+        from services.task_manager import Task
+
+        task = Task("retryapi1", "https://youtu.be/retryapi")
+        task.status = "FAILED"
+        task.progress = 55
+        task.completed_stages = ["metadata", "download"]
+        task.stage_artifacts = {"download": {"video_path": "/tmp/keep.mp4", "sub_path": None}}
+        task.logs = ["kept-log"]
+        task.current_stage = "edit"
+        task.last_error = "upload boom"
+        task_manager.tasks[task.id] = task
+        try:
+            with patch("services.task_manager.threading.Thread") as thread_cls:
+                res = self.client.post(f"/api/tasks/{task.id}/retry")
+                start = self.client.post(f"/api/tasks/{task.id}/start")
+                created = task_manager.create_task("https://youtu.be/freshitem", skip_subtitles=True)
+            self.assertEqual(res.status_code, 200)
+            self.assertIn("CookieCloud", res.json()["message"])
+            body = res.json()["task"]
+            self.assertIn("download", body["completed_stages"])
+            self.assertEqual(body["stage_artifacts"]["download"]["video_path"], "/tmp/keep.mp4")
+            self.assertEqual(body["progress"], 55)
+            self.assertTrue(any("kept-log" in line for line in body["logs"]))
+            self.assertIn("CookieCloud", start.json()["message"])
+            self.assertEqual(thread_cls.call_args_list[0].kwargs["kwargs"], {"resume": True})
+            self.assertEqual(thread_cls.call_args_list[1].kwargs["kwargs"], {"resume": True})
+            self.assertNotIn("kwargs", thread_cls.call_args_list[2].kwargs)
+            task_manager.tasks.pop(created.id, None)
+        finally:
+            task_manager.tasks.pop(task.id, None)
+
+    def test_cancel_stops_resume_before_work(self):
+        from services.task_manager import Task
+
+        task = Task("resume-cancel", "https://youtu.be/cancelme", skip_subtitles=True)
+        task.cancelled = True
+        task.status = "CANCELLED"
+        task_manager.tasks[task.id] = task
+        try:
+            task_manager._run_task_pipeline(task, resume=True)
+            self.assertEqual(task.status, "CANCELLED")
+            self.assertIsNone(task.last_error)
+            self.assertTrue(any("cancellation" in line for line in task.logs))
+        finally:
+            task_manager.tasks.pop(task.id, None)
+
+
 if __name__ == "__main__":
     unittest.main()
