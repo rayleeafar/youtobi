@@ -21,6 +21,38 @@ from services.youtube_uploader import YouTubeUploaderService
 logger = logging.getLogger("youtobi.task_manager")
 TASKS_FILE = BASE_DIR / "tasks.json"
 
+# Ordered pipeline. cookie_sync always re-runs; later stages skip when their outputs still exist.
+STAGE_ORDER = (
+    "cookie_sync",
+    "metadata",
+    "download",
+    "subtitles",
+    "edit",
+    "llm",
+    "bilibili_upload",
+    "youtube_upload",
+)
+
+# Redoing a stage invalidates these later stages (uploads are independent of each other).
+_STAGE_DEPENDENTS = {
+    "metadata": ("llm", "bilibili_upload", "youtube_upload"),
+    "download": ("subtitles", "edit", "bilibili_upload", "youtube_upload"),
+    "subtitles": ("edit", "bilibili_upload", "youtube_upload"),
+    "edit": ("bilibili_upload", "youtube_upload"),
+    "llm": ("bilibili_upload", "youtube_upload"),
+}
+
+
+def _usable_file(path) -> bool:
+    # ponytail: size>0 is the corrupt check; ffprobe only if empty-but-broken files show up
+    if not path:
+        return False
+    try:
+        file_path = Path(path)
+        return file_path.is_file() and file_path.stat().st_size > 0
+    except OSError:
+        return False
+
 class Task:
     def __init__(
         self,
@@ -56,6 +88,15 @@ class Task:
         self.youtube_video_id: Optional[str] = None
         self.youtube_watch_url: Optional[str] = None
         self.cancelled: bool = False
+        self.current_stage: Optional[str] = None
+        self.completed_stages: List[str] = []
+        self.stage_artifacts: Dict[str, Any] = {}
+        self.last_error: Optional[str] = None
+        self.resume_from: Optional[str] = None
+
+    def set_error(self, message: Optional[str]):
+        self.error_message = message
+        self.last_error = message
 
     def log(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -89,6 +130,13 @@ class Task:
             "youtube_video_id": self.youtube_video_id,
             "youtube_watch_url": self.youtube_watch_url,
             "cancelled": self.cancelled,
+            "processed_video_path": self.processed_video_path,
+            "chinese_srt_path": self.chinese_srt_path,
+            "current_stage": self.current_stage,
+            "completed_stages": self.completed_stages,
+            "stage_artifacts": self.stage_artifacts,
+            "last_error": self.last_error,
+            "resume_from": self.resume_from,
         }
 
     @classmethod
@@ -118,6 +166,13 @@ class Task:
         task.youtube_video_id = data.get("youtube_video_id")
         task.youtube_watch_url = data.get("youtube_watch_url")
         task.cancelled = data.get("cancelled", False)
+        task.current_stage = data.get("current_stage")
+        task.completed_stages = list(data.get("completed_stages") or [])
+        task.stage_artifacts = dict(data.get("stage_artifacts") or {})
+        task.last_error = data.get("last_error", data.get("error_message"))
+        if task.error_message is None:
+            task.error_message = task.last_error
+        task.resume_from = data.get("resume_from")
 
         return task
 
