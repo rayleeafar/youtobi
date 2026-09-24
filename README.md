@@ -43,8 +43,8 @@
 
 ### 5. ☁️ CookieCloud 凭据同步 (CookieCloud)
 - 设置里填写服务器地址、UUID、密码后，可手动 `POST /api/cookiecloud/sync`。
-- **每条任务的流水线开头都会再同步一次**（已配置 URL、UUID、密码时），包括新建、**启动**（`POST /api/tasks/{task_id}/start`）和 **重试**（`POST /api/tasks/{task_id}/retry`）。同步到的 YouTube Netscape Cookie 与 Bilibili `SESSDATA` / `bili_jct` / `DedeUserID` 写回配置，再开始下载。
-- 同步失败只记一条警告，任务继续用当前已保存的 Cookie。未配置 CookieCloud 时这一步直接跳过。
+- **每条任务的流水线开头都会再同步一次**（已配置 URL、UUID、密码时），包括新建、**启动**（`POST /api/tasks/{task_id}/start`）和 **重试**（`POST /api/tasks/{task_id}/retry`）。同步到的 YouTube Netscape Cookie 与 Bilibili `SESSDATA` / `bili_jct` / `DedeUserID` 写回配置，再进入后面的阶段。`cookie_sync` 不能跳过。
+- 新建任务时，同步失败只记警告，流水线用当前已保存的 Cookie 继续。**启动和重试不一样**：CookieCloud 已配置但同步抛错时，任务停在 `cookie_sync`，后面的阶段不会跑，已经写入的 Cookie 保持上次成功的值。未配置 CookieCloud 时这一步直接跳过。
 - 解密兼容 CryptoJS legacy（MD5 `EVP_BytesToKey`）和 AES-128-CBC（固定零 IV，以及 key-as-IV）。
 - 同仓库的 [`cookiecloud-cloudflare/`](cookiecloud-cloudflare/README.md) 是一份可部署到 Cloudflare Workers / Pages 的 CookieCloud 服务端，用 KV 存加密 Cookie。
 - 敏感字段在设置接口里脱敏返回。`auto_delete_after_upload` 默认开启，发布成功后删除该任务的本地下载目录。
@@ -71,24 +71,42 @@
 
 `GET /api/system/stats` 的字段：`hostname`、`ip`、`country`、`cpu_percent`、`cpu_count`、`load_avg`、`memory`（`total` / `used` / `percent`）、`disk`（`total` / `used` / `percent` / `mount`）、`net`（`bytes_sent` / `bytes_recv`）、`uptime_seconds`、`sampled_at`。
 
-### 7. 📋 任务卡与重试 (Task Card & Retry)
-任务列表每 3 秒刷新。状态为 `PENDING`、`DOWNLOADING`、`SUBTITLE_PROCESSING`、`LLM_REGENERATION`、`UPLOADING`、`COMPLETED`、`FAILED`、`PAUSED`、`CANCELLED`。进度是 0–100 的百分比，不是一组可跳过的阶段名。
+### 7. 📋 任务卡、断点续跑与复制链接 (Task Card, Resume & Copy Link)
+任务列表每 3 秒刷新。状态仍是 `PENDING`、`DOWNLOADING`、`SUBTITLE_PROCESSING`、`LLM_REGENERATION`、`UPLOADING`、`COMPLETED`、`FAILED`、`PAUSED`、`CANCELLED`。进度条仍是 0–100，同时每条任务记下 `current_stage`、`completed_stages` 和 `stage_artifacts`（保存在 `tasks.json`）。
 
-任务卡按钮：
+阶段顺序：
+
+| 阶段 | 进度进入时 | 可跳过的条件 |
+| --- | --- | --- |
+| `cookie_sync` | 至少 1% | 从不跳过 |
+| `metadata` | 10% | 已有标题，且记录里的 URL 与任务 URL 一致 |
+| `download` | 10% → 35% | 源视频文件还在且大小大于 0。空文件会重新下载 |
+| `subtitles` | 40% | 字幕阶段已完成，跳过字幕开关没变，需要烧录时 SRT 还在 |
+| `edit` | 50% → 65% | 成片还在，且镜像 / 黑边 / 水印 / 字幕选项与上次一致 |
+| `llm` | 70% → 80% | 已有最终标题，且来源标题没变 |
+| `bilibili_upload` | 85% 起 | 目标包含 Bilibili，且已有 BV 号 |
+| `youtube_upload` | 92% 起 | 目标包含 YouTube，且已有视频 ID |
+
+两个上传互不影响：B 站已经成功时，重试只补 YouTube，反过来也一样。没选中的平台不算未完成。重做前面的阶段会作废依赖它的后续阶段（例如重新下载会作废字幕、剪辑和两次上传）。
+
+**启动**和**重试**走同一条续跑路径（`resume=true`）：保留进度、日志、已完成阶段和产物，先做一次 CookieCloud 同步，再从第一个还不能跳过的阶段继续。失败时 `resume_from` 记在当前阶段。新建任务不会把磁盘上的旧文件当成断点。
+
+任务卡在标题旁有 **📋 复制链接**。它复制的是提交时的原始 YouTube URL（`youtube_url`），放在转义过的 `data-copy-url` 里。优先用 `navigator.clipboard.writeText`；被拒绝时退回隐藏 textarea 的 `document.execCommand('copy')`。成功后按钮变成 **✅ 已复制**，1.5 秒后回到 **📋 复制链接**。
+
+已暂停、失败或取消、并且已经完成过至少一个工作阶段时，卡片会写出当前阶段、已完成阶段（展示时略去 `cookie_sync`）和上次错误，重试按钮文案改为 **从断点重试**，并提示「重试会先同步 CookieCloud，再从第一个未完成阶段继续」。
 
 | 按钮 | 接口 | 行为 |
 | --- | --- | --- |
+| 📋 复制链接 | 浏览器剪贴板 | 复制这条任务的原始 YouTube URL |
 | 视频预览 | `GET /api/tasks/{task_id}/stream` | 播放该任务目录里的成片 |
 | 暂停 | `POST /api/tasks/{task_id}/stop` | 标记取消，状态改为 `PAUSED` |
-| 启动 | `POST /api/tasks/{task_id}/start` | 进度归零，**保留已有日志**，重新跑流水线 |
+| 启动 | `POST /api/tasks/{task_id}/start` | 先同步 CookieCloud，再从第一个未完成阶段继续 |
 | 跳过字幕 | `POST /api/tasks/{task_id}/skip_subtitles` | 只改这一条任务的开关 |
-| 重试 | `POST /api/tasks/{task_id}/retry` | 进度归零，**清空日志**，重新跑流水线 |
+| 重试 / 从断点重试 | `POST /api/tasks/{task_id}/retry` | 与启动相同的续跑；不清日志、不把进度打回 0 |
 | 删除 | `DELETE /api/tasks/{task_id}` | 取消任务并删掉本地下载目录 |
 | 取消 | `POST /api/tasks/{task_id}/cancel` | 状态改为 `CANCELLED`（界面主按钮是暂停 / 删除） |
 
-**启动和重试都会从头执行**：CookieCloud 同步 → 拉元数据并下载 → 字幕与二创 → LLM 简介 → 按目标平台上传。已完成的步骤不会被跳过，失败点也不会被当成断点续跑。YouTube 侧的断点续传只存在于单次上传的 resumable session 里，不是任务级续跑。
-
-发布成功后，卡片给出 B 站 BV 链接和 YouTube 观看链接。
+发布成功后，卡片给出 B 站 BV 链接和 YouTube 观看链接。YouTube Data API 自己的 resumable upload（8MB 分片）仍然只覆盖单次上传会话。
 
 ---
 
@@ -108,18 +126,18 @@ youtobi/
 │   ├── cookiecloud.py          # CookieCloud 拉取与解密
 │   ├── llm.py                  # 标题 / 简介 / 字幕翻译
 │   ├── subtitle.py             # SRT、内嵌字幕、Whisper
-│   ├── task_manager.py         # 任务持久化与流水线（tasks.json）
+│   ├── task_manager.py         # 分阶段流水线、断点续跑与 tasks.json
 │   ├── video_editor.py         # FFmpeg 单次 -vf：镜像、黑边、水印、烧录
 │   ├── youtube.py              # yt-dlp 元数据、下载、多 URL / 播放列表拆分
 │   └── youtube_uploader.py     # YouTube Data API v3 OAuth 与 resumable upload
 ├── static/
 │   ├── css/style.css           # 暗色玻璃拟态样式，含主机条
-│   └── js/app.js               # 首页逻辑：主机条 15s 轮询、任务卡、设置
+│   └── js/app.js               # 首页：主机条 15s 轮询、阶段进度、复制链接、设置
 ├── templates/
 │   ├── index.html              # 控制台（主机条、提交、二创、任务列表、设置）
 │   └── login.html              # 管理登录
 ├── tests/
-│   └── test_youtobi.py         # unittest 套件，26 个测试方法
+│   └── test_youtobi.py         # unittest 套件，31 个测试方法
 ├── cookiecloud-cloudflare/     # 可选的 Cloudflare CookieCloud 服务端
 └── docs/
     ├── images/                 # 本 README 的界面截图
@@ -205,9 +223,9 @@ python3 app.py
 | `POST` | `/api/tasks` | 按 URL / 播放列表创建任务并立即开跑 |
 | `GET` | `/api/tasks` | 任务列表 |
 | `GET` | `/api/tasks/{task_id}` | 单条任务 |
-| `POST` | `/api/tasks/{task_id}/start` | 启动（进度归零，保留日志，重新同步 Cookie） |
+| `POST` | `/api/tasks/{task_id}/start` | 同步 CookieCloud 后，从第一个未完成阶段继续 |
 | `POST` | `/api/tasks/{task_id}/stop` | 暂停 |
-| `POST` | `/api/tasks/{task_id}/retry` | 重试（进度归零，清空日志，重新同步 Cookie） |
+| `POST` | `/api/tasks/{task_id}/retry` | 与启动相同的续跑（保留进度、日志和已完成阶段） |
 | `POST` | `/api/tasks/{task_id}/cancel` | 取消 |
 | `POST` | `/api/tasks/{task_id}/skip_subtitles` | 切换跳过字幕 |
 | `DELETE` | `/api/tasks/{task_id}` | 删除任务与本地文件 |
@@ -290,7 +308,7 @@ OAuth 重定向 URI 要和浏览器实际访问的域名一致。
 
 ## 🧪 测试 (Testing)
 
-`tests/test_youtobi.py` 里有 **26** 个 `unittest` 测试方法，覆盖配置、登录、主机统计（含未登录 401、公网 IP 回退与缓存）、任务生命周期、字幕 / Whisper、B 站分 P、CookieCloud 解密、LLM、FFmpeg 滤镜、YouTube OAuth 与双平台编排。
+`tests/test_youtobi.py` 里有 **31** 个 `unittest` 测试方法，覆盖配置、登录、主机统计（含未登录 401、公网 IP 回退与缓存）、任务生命周期、分阶段续跑与 CookieCloud 失败中止、字幕 / Whisper、B 站分 P、CookieCloud 解密、LLM、FFmpeg 滤镜、YouTube OAuth 与双平台编排。
 
 ```bash
 PYTHONPATH=. python -m unittest tests.test_youtobi
