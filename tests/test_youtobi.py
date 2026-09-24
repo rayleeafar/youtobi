@@ -1158,6 +1158,41 @@ Second subtitle line
         finally:
             task_manager.tasks.pop(task.id, None)
 
+    def test_bilibili_upload_preflight_invalid_credentials(self):
+        from unittest.mock import patch
+        from services.bilibili import BilibiliService
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_vid = Path(tmpdir) / "test.mp4"
+            fake_vid.write_bytes(b"dummy")
+
+            service = BilibiliService(sessdata="invalid_sess", bili_jct="jct", dedeuserid="123")
+            with patch.object(service, "validate_credentials", return_value={"valid": False, "message": "账号未登录"}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    service.upload_video(video_path=fake_vid, title="Title", description="Desc", tags=["test"])
+                self.assertIn("Bilibili 登录凭据无效或已失效 (账号未登录)", str(ctx.exception))
+                self.assertIn("CookieCloud", str(ctx.exception))
+
+    def test_cookiecloud_sync_api_bilibili_validation(self):
+        from unittest.mock import patch
+
+        dummy_cookies = {"SESSDATA": "fake_sess", "bili_jct": "fake_jct", "DedeUserID": "888"}
+
+        with patch("services.cookiecloud.CookieCloudService.fetch_all_synced_cookies", return_value=(dummy_cookies, "fake_yt")), \
+             patch("services.bilibili.BilibiliService.validate_credentials", return_value={"valid": True, "uname": "TestUser", "mid": 888, "level": 6}):
+            resp = self.client.post("/api/cookiecloud/sync", json={
+                "cookiecloud_url": "https://cc.example.com",
+                "cookiecloud_uuid": "uuid",
+                "cookiecloud_password": "pass"
+            })
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertTrue(data["success"])
+            self.assertIn("已验证用户: TestUser", data["message"])
+            self.assertTrue(data["bilibili_check"]["valid"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

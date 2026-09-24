@@ -261,6 +261,16 @@ class BilibiliService:
                 "tags": tags
             }
 
+        # Pre-flight credential check
+        cred_check = self.validate_credentials()
+        if not cred_check.get("valid"):
+            err_reason = cred_check.get("message", "账号未登录")
+            raise RuntimeError(
+                f"Bilibili 登录凭据无效或已失效 ({err_reason})，无法上传视频。"
+                f"请在浏览器中重新登录 B站 并通过 CookieCloud 同步，或在设置中更新 SESSDATA！"
+            )
+        logger.info(f"Bilibili credentials verified for user '{cred_check.get('uname')}' (UID: {cred_check.get('mid')})")
+
         # Method A: Try bilibili-api-python UPOS uploader engine
         try:
             import asyncio
@@ -484,7 +494,11 @@ class BilibiliService:
                 
                 r_pre = requests.get(preupload_url, headers=headers, timeout=15)
                 if r_pre.status_code != 200:
-                    raise RuntimeError(f"Bilibili preupload HTTP {r_pre.status_code}: {r_pre.text[:200]}")
+                    if "<!DOCTYPE" in r_pre.text or "<html" in r_pre.text or "出错啦" in r_pre.text:
+                        err_detail = "Bilibili 会话验证失败 (HTTP 403 出错啦/未登录页面)，请确认 SESSDATA 有效性"
+                    else:
+                        err_detail = r_pre.text[:200]
+                    raise RuntimeError(f"Bilibili preupload HTTP {r_pre.status_code}: {err_detail}")
                 
                 try:
                     pre_data = r_pre.json()

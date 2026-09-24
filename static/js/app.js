@@ -783,6 +783,9 @@ async function syncCookieCloud() {
         document.getElementById('youtube_cookies').value = data.youtube_cookies;
       }
       await loadConfig();
+      if (typeof checkBilibiliLogin === 'function') {
+        await checkBilibiliLogin();
+      }
     } else {
       alert('CookieCloud 同步失败: ' + (data.detail || data.message || '未知错误'));
     }

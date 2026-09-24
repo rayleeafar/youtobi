@@ -500,13 +500,33 @@ async def sync_cookiecloud(req: Optional[CookieCloudSyncRequest] = None):
         config_manager.update(update_dict)
 
         msg_parts = []
+        bili_val_result = None
         if bili_cookies:
-            msg_parts.append("Bilibili 登录 Cookie")
+            try:
+                bili_service = BilibiliService(
+                    sessdata=bili_cookies.get("SESSDATA", ""),
+                    bili_jct=bili_cookies.get("bili_jct", ""),
+                    dedeuserid=bili_cookies.get("DedeUserID", ""),
+                    extra_cookies=bili_cookies
+                )
+                bili_val_result = bili_service.validate_credentials()
+                if bili_val_result.get("valid"):
+                    msg_parts.append(f"Bilibili 登录 Cookie (已验证用户: {bili_val_result.get('uname', '未知')})")
+                else:
+                    msg_parts.append(f"Bilibili 登录 Cookie (⚠️ {bili_val_result.get('message', '账号未登录/凭证已失效')})")
+            except Exception:
+                msg_parts.append("Bilibili 登录 Cookie")
         if yt_netscape:
             msg_parts.append("YouTube Netscape Cookie")
         msg_str = " 及 ".join(msg_parts)
 
-        return {"success": True, "cookies": bili_cookies, "youtube_cookies": yt_netscape, "message": f"CookieCloud 同步成功！已自动填入最新的 {msg_str}。"}
+        return {
+            "success": True,
+            "cookies": bili_cookies,
+            "youtube_cookies": yt_netscape,
+            "bilibili_check": bili_val_result,
+            "message": f"CookieCloud 同步成功！已自动填入最新的 {msg_str}。"
+        }
 
     except Exception as e:
         logger.error(f"CookieCloud sync error: {e}")
