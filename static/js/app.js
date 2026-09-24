@@ -462,6 +462,52 @@ async function cancelTask(taskId) {
   }
 }
 
+const copiedUrlUntil = {};
+
+async function copyTaskUrl(button) {
+  const url = button.dataset.copyUrl || '';
+  const taskId = button.dataset.taskId || '';
+  if (!url) return;
+  try {
+    await writeClipboard(url);
+  } catch (err) {
+    button.textContent = '复制失败';
+    setTimeout(() => {
+      if (button.isConnected) button.textContent = '📋 复制链接';
+    }, 1500);
+    return;
+  }
+  const until = Date.now() + 1500;
+  copiedUrlUntil[taskId] = until;
+  button.textContent = '✅ 已复制';
+  setTimeout(() => {
+    if (copiedUrlUntil[taskId] !== until) return;
+    delete copiedUrlUntil[taskId];
+    if (button.isConnected) button.textContent = '📋 复制链接';
+  }, 1500);
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (err) {
+      // ponytail: clipboard API rejects outside a secure context or without permission
+    }
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.left = '-9999px';
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  if (!ok) throw new Error('copy failed');
+}
+
 async function retryTask(taskId) {
   try {
     const res = await fetch(`/api/tasks/${taskId}/retry`, { method: 'POST' });
@@ -587,6 +633,10 @@ function renderTaskCard(task) {
     ? `<div style="font-size: 0.8rem; color: #ff8a80; margin: -0.35rem 0 0.75rem;">上次错误：${escapeHtml(lastError)}</div>`
     : '';
   const taskTitle = escapeHtml(task.final_title || task.youtube_info?.title || task.youtube_url);
+  const copyLabel = copiedUrlUntil[task.id] > Date.now() ? '✅ 已复制' : '📋 复制链接';
+  const copyButton = task.youtube_url
+    ? `<button type="button" class="btn btn-secondary" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; flex: 0 0 auto;" data-task-id="${escapeHtml(task.id)}" data-copy-url="${escapeHtml(task.youtube_url)}" onclick="copyTaskUrl(this)">${copyLabel}</button>`
+    : '';
 
   // Target platform badges
   const targets = task.upload_targets || ['bilibili'];
@@ -637,7 +687,10 @@ function renderTaskCard(task) {
             ${targetBadgesHtml}
             ${secBadgesHtml}
           </div>
-          <h3 style="font-size: 1.1rem; margin-top: 2px;">${taskTitle}</h3>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px;">
+            <h3 style="font-size: 1.1rem; margin: 0;">${taskTitle}</h3>
+            ${copyButton}
+          </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
           ${task.skip_subtitles ? `<span class="badge" style="background: rgba(234, 179, 8, 0.2); color: #eab308; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">⚡ 跳过字幕</span>` : ''}
