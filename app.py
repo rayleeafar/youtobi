@@ -351,7 +351,7 @@ async def start_task(task_id: str):
     task = task_manager.start_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-    return {"success": True, "task": task.to_dict(), "message": "Task started."}
+    return {"success": True, "task": task.to_dict(), "message": "CookieCloud sync scheduled; resuming from the first incomplete stage."}
 
 @app.post("/api/tasks/{task_id}/skip_subtitles")
 async def toggle_skip_subtitles(task_id: str, req: Optional[SkipSubtitlesRequest] = None):
@@ -373,7 +373,7 @@ async def retry_task(task_id: str):
     task = task_manager.retry_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-    return {"success": True, "task": task.to_dict(), "message": "Task re-queued."}
+    return {"success": True, "task": task.to_dict(), "message": "CookieCloud sync scheduled; resuming from the first incomplete stage."}
 
 @app.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str):
