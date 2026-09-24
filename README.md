@@ -5,67 +5,129 @@
   <i>All-in-One Automated Video Downloader, Secondary Creation, Subtitle Burn-in, and Multi-Platform Publishing Engine</i>
 </p>
 
+<p align="center">
+  默认分支 / default branch: <b><code>master</code></b>
+</p>
+
 ---
 
 ## 🌟 核心特性 (Features)
 
 ### 1. 🚀 双平台自动上传发布 (Dual-Platform Auto Upload)
-- **多目标自由选择**：支持仅发布到 Bilibili (`bilibili`)、仅发布到 YouTube (`youtube`) 或**双平台并发同步发布** (`["bilibili", "youtube"]`)。
-- **YouTube Data API v3 官方集成**：基于 Google OAuth 2.0 协议，支持断点续传（Resumable Upload）、缩略图上传、发布隐私状态（`public` / `unlisted` / `private`）与视频分类（`Category ID` 下拉选择 + 自定义输入）。
-- **全自动 OAuth2 回调闭环**：内置 `/oauth2callback` 路由，一键唤起 Google 授权页面，自动完成 Code 换取 Refresh Token 并安全持久化保存。
-- **Bilibili 分片并发直传**：支持大文件自动分片、原生视频切片与分P（超过B站时长限制时自动切片）、并保存 BV 号与完整跳转链接。
+- **多目标自由选择**：单次提交可选仅 Bilibili（`bilibili`）、仅 YouTube（`youtube`），或两者一起（`["bilibili", "youtube"]`）。首页勾选「哔哩哔哩 / YouTube 频道」即可，未传时回退到配置里的 `upload_targets`（默认 `["bilibili"]`）。
+- **多链接与播放列表**：文本框支持多行 URL。`POST /api/tasks` 会拆成多条独立任务。
+- **YouTube Data API v3**：OAuth 2.0、resumable upload（8MB 分片，单片失败重试 3 次）、缩略图、隐私状态（`public` / `unlisted` / `private`，默认 `unlisted`）以及分类 ID（下拉 + 手填，默认 `22`）。
+- **OAuth 回调**：`GET /oauth2callback` 落地页用授权 code 换 Refresh Token 并写入配置。授权范围是 `youtube.upload` 与 `youtube.readonly`。
+- **Bilibili 上传**：带 Cookie 直传。超过 8 小时（28800 秒）自动切分 P 并走多 P。成功后保存 BV 号，任务卡给出 `https://www.bilibili.com/video/{bvid}`。
 
 ### 2. 🎨 视频智能二创引擎 (Secondary Creation Engine)
-在处理搬运视频时提供多样化的二创混剪预处理，均在 **单次 FFmpeg 滤镜链中完成（Single-Pass）**，无二次转码损耗：
-- **画面水平镜像翻转 (`hflip`)**：一键左右镜像，破除基础画面查重。
-- **自定义黑边缩放比例 (`pad & scale`)**：支持 `0% ~ 20%` 自由调节边框黑边，按比例缩小画面并添加四周黑边边框。
-- **极值对比度隐形数字水印 (`Steganographic Invisible Watermark`)**：采用超低透明度（Alpha 0.012）在视频画面中渲染水印文本，肉眼日常播放近乎不可见，但通过画面对比度/色阶拉到极值时即可清晰显现作为版权或溯源标记。
-- **字幕烧录与二创无损合并**：若包含中文字幕，字幕烧录与镜像/黑边/水印在同一个滤镜图中单次压制，高效省时。
+二创与字幕烧录走 **同一条 FFmpeg `-vf` 滤镜链**，只压制一次：
+- **水平镜像 (`hflip`)**。
+- **黑边缩放**：边框比例 `0`–`0.20`（界面 0%–20%）。
+- **低透明度文字水印**：默认 alpha `0.012`，日常播放几乎看不见，拉高对比度后可作标记。
+- 字幕需要烧录时，与镜像 / 黑边 / 水印放在同一次滤镜里。
+
+提交页有「视频二创增强处理」折叠面板；也可以在设置里保存默认值。任务卡会标出本条任务实际用了哪些二创。
 
 ### 3. 🎙️ 智能字幕与语音识别 (Subtitles & Whisper STT)
-- **多语言自动识别**：自动检测源视频语言。中文视频免烧录，英文及其他语言自动下载字幕轨。
-- **Whisper 语音转写降级**：当 YouTube 视频缺乏自带字幕时，自动提取音频流调用 Whisper API 进行语音转文字并切分时间轴。
-- **大模型精准汉化**：将非中文 SRT 字幕通过 LLM 分块批量翻译为地道流利的简体中文字幕。
+- 用视频语言判断是否中文。已有中文字幕时不烧录；其他语言下载字幕轨并译成简体中文 SRT。
+- 没有外挂字幕时，会用 ffprobe 看内嵌字幕并用 ffmpeg 抽出。
+- **Whisper**：没有可用字幕且开启了 Whisper 时，抽音频走兼容 OpenAI 的转写接口（默认模型 `whisper-1`），再切成 SRT。
+- 非中文 SRT 经 LLM 分块翻译。
+- **跳过字幕**：提交页或任务卡可打开 `skip_subtitles`，字幕识别和烧录都跳过，适合小机器直传。接口是 `POST /api/tasks/{task_id}/skip_subtitles`。
 
-### 4. 🤖 AI 标题与简介二次重写 (LLM Metadata Regeneration)
-- 支持接入主流兼容 OpenAI 规范的 API（如 GPT-4o、DeepSeek、Gemini、Grok 等）。
-- 自动提取 YouTube 原视频标题与详细描述，智能生成符合国内/目标受众喜好的吸引人标题、中文长描述与标签（Tags）。
-- 未配置或未启用 LLM 时，平滑无缝回退使用原视频标题与简介。
+### 4. 🤖 AI 标题与简介 (LLM Metadata)
+- 任意 OpenAI 兼容接口（Base URL、模型名、API Key）。设置里可以拉模型列表（`POST /api/llm/models`）并试一次调用（`POST /api/llm/test`）。
+- 开启且 Key 有效时，用原标题和简介生成中文标题、长简介和标签。调用失败会重试，最多 3 次，然后回退原文。
+- 勾选了 LLM 但没填 Key，或根本没开启时，直接用 YouTube 原标题和简介。任务卡会标明这条简介是否来自 LLM。
 
-### 5. ☁️ CookieCloud 凭据自动化同步与安全沙箱
-- **任务前自动同步**：支持对接 CookieCloud 服务，在任务启动下载前自动拉取最新的 YouTube 与 Bilibili 登录 Cookie，彻底解决 Cookie 失效导致下载/上传中断的问题。
-- **双重解密兼容**：原生兼容 CookieCloud 经典 MD5 与 AES-128-CBC 两种密钥派生解密格式。
-- **脱敏与安全沙箱**：API Key、OAuth Client Secret、Refresh Token 前端统一掩码脱敏显示；测试套件自带沙箱隔离，绝不污染覆盖生产环境配置与历史任务。
-- **自动清理磁盘空间**：支持视频成功发布后自动删除本地下载与压制的中间视频文件，杜绝磁盘爆满。
+### 5. ☁️ CookieCloud 凭据同步 (CookieCloud)
+- 设置里填写服务器地址、UUID、密码后，可手动 `POST /api/cookiecloud/sync`。
+- **每条任务的流水线开头都会再同步一次**（已配置 URL、UUID、密码时），包括新建、**启动**（`POST /api/tasks/{task_id}/start`）和 **重试**（`POST /api/tasks/{task_id}/retry`）。同步到的 YouTube Netscape Cookie 与 Bilibili `SESSDATA` / `bili_jct` / `DedeUserID` 写回配置，再开始下载。
+- 同步失败只记一条警告，任务继续用当前已保存的 Cookie。未配置 CookieCloud 时这一步直接跳过。
+- 解密兼容 CryptoJS legacy（MD5 `EVP_BytesToKey`）和 AES-128-CBC（固定零 IV，以及 key-as-IV）。
+- 同仓库的 [`cookiecloud-cloudflare/`](cookiecloud-cloudflare/README.md) 是一份可部署到 Cloudflare Workers / Pages 的 CookieCloud 服务端，用 KV 存加密 Cookie。
+- 敏感字段在设置接口里脱敏返回。`auto_delete_after_upload` 默认开启，发布成功后删除该任务的本地下载目录。
+
+### 6. 📊 主机资源条 (Host Resource Banner)
+登录后的首页，标题栏下面有一条粘性主机条。页面加载后立刻拉一次，约 1.5 秒后再拉一次（这样才有带宽差值），之后每 **15 秒** 轮询。
+
+数据来自需登录的 `GET /api/system/stats`（未登录返回 401）。采集失败返回 503，条上显示「更新失败」，并保留上一次成功的数字。
+
+条上展示：
+- 主机名、**公网 IPv4**、由两位国家码画出的 **国旗**、开机时长。
+- CPU（占用、核数、1 分钟负载）、内存、根分区磁盘（读不到 `/` 时改用进程工作目录）。占用 ≥70% 为警告色，≥90% 为高亮。
+- 上下行速率。服务端只给累计字节，浏览器用相邻两次 `sampled_at` 相减。第一次采样显示「采样中」。
+
+公网地址优先读 Cloudflare trace（`https://1.1.1.1/cdn-cgi/trace` 的 `ip` 与 `loc`）。没有全局 IPv4 时再问 `https://api.ipify.org`，国家码再问 `https://ipapi.co/{ip}/country/`。成功结果缓存 5 分钟；查不到时 60 秒后再试，并继续显示上一次的有效地址。
+
+![首页主机资源条，展示 CPU、内存、磁盘和上下行带宽](docs/images/host-banner-desktop.png)
+
+*首页粘性主机条：CPU / 内存 / 磁盘，以及由两次采样算出的带宽。Sticky host banner with CPU, memory, disk, and throughput.*
+
+![同一条主机资源条，主机名旁显示公网 IP 与国家旗帜](docs/images/host-banner-public-ip.png)
+
+*公网 IPv4 与国家旗帜显示在主机名旁边。Public IPv4 and country flag sit next to the hostname.*
+
+`GET /api/system/stats` 的字段：`hostname`、`ip`、`country`、`cpu_percent`、`cpu_count`、`load_avg`、`memory`（`total` / `used` / `percent`）、`disk`（`total` / `used` / `percent` / `mount`）、`net`（`bytes_sent` / `bytes_recv`）、`uptime_seconds`、`sampled_at`。
+
+### 7. 📋 任务卡与重试 (Task Card & Retry)
+任务列表每 3 秒刷新。状态为 `PENDING`、`DOWNLOADING`、`SUBTITLE_PROCESSING`、`LLM_REGENERATION`、`UPLOADING`、`COMPLETED`、`FAILED`、`PAUSED`、`CANCELLED`。进度是 0–100 的百分比，不是一组可跳过的阶段名。
+
+任务卡按钮：
+
+| 按钮 | 接口 | 行为 |
+| --- | --- | --- |
+| 视频预览 | `GET /api/tasks/{task_id}/stream` | 播放该任务目录里的成片 |
+| 暂停 | `POST /api/tasks/{task_id}/stop` | 标记取消，状态改为 `PAUSED` |
+| 启动 | `POST /api/tasks/{task_id}/start` | 进度归零，**保留已有日志**，重新跑流水线 |
+| 跳过字幕 | `POST /api/tasks/{task_id}/skip_subtitles` | 只改这一条任务的开关 |
+| 重试 | `POST /api/tasks/{task_id}/retry` | 进度归零，**清空日志**，重新跑流水线 |
+| 删除 | `DELETE /api/tasks/{task_id}` | 取消任务并删掉本地下载目录 |
+| 取消 | `POST /api/tasks/{task_id}/cancel` | 状态改为 `CANCELLED`（界面主按钮是暂停 / 删除） |
+
+**启动和重试都会从头执行**：CookieCloud 同步 → 拉元数据并下载 → 字幕与二创 → LLM 简介 → 按目标平台上传。已完成的步骤不会被跳过，失败点也不会被当成断点续跑。YouTube 侧的断点续传只存在于单次上传的 resumable session 里，不是任务级续跑。
+
+发布成功后，卡片给出 B 站 BV 链接和 YouTube 观看链接。
 
 ---
 
 ## 🏗️ 系统架构 (Architecture)
 
+页面实际加载的脚本是 `static/js/app.js`（`templates/index.html` → `/app_static/js/app.js`）。`app_v2.js` 与 `youtobi_app.js` 还在仓库里，模板没有引用它们。
+
 ```
 youtobi/
-├── app.py                      # FastAPI Web 服务、API 路由及 OAuth 回调落地页
-├── config.py                   # 统一配置管理器与默认配置
-├── config.example.json         # 配置文件示例
-├── requirements.txt            # Python 依赖清单
+├── app.py                      # FastAPI、登录中间件、/api/system/stats、任务与 OAuth 路由
+├── config.py                   # 默认配置与 config.json 读写
+├── config.example.json         # 配置示例（无真实密钥）
+├── requirements.txt            # Python 依赖（含 psutil，供主机条采集）
+├── LICENSE                     # MIT
 ├── services/
-│   ├── bilibili.py             # Bilibili 分片直传与视频分P服务
-│   ├── cookiecloud.py          # CookieCloud 自动解密与同步服务
-│   ├── llm.py                  # LLM 标题/简介翻译与生成服务
-│   ├── subtitle.py             # 字幕转换、Whisper 语音识别与翻译
-│   ├── task_manager.py         # 异步任务调度与多平台发布编排
-│   ├── video_editor.py         # FFmpeg 单 pass 镜像、边框缩放与隐形水印引擎
-│   ├── youtube.py              # yt-dlp 视频元数据与资源下载服务
-│   └── youtube_uploader.py     # YouTube Data API v3 OAuth2 & 断点续传发布服务
+│   ├── bilibili.py             # Bilibili 上传与超过 8 小时的分 P
+│   ├── cookiecloud.py          # CookieCloud 拉取与解密
+│   ├── llm.py                  # 标题 / 简介 / 字幕翻译
+│   ├── subtitle.py             # SRT、内嵌字幕、Whisper
+│   ├── task_manager.py         # 任务持久化与流水线（tasks.json）
+│   ├── video_editor.py         # FFmpeg 单次 -vf：镜像、黑边、水印、烧录
+│   ├── youtube.py              # yt-dlp 元数据、下载、多 URL / 播放列表拆分
+│   └── youtube_uploader.py     # YouTube Data API v3 OAuth 与 resumable upload
 ├── static/
-│   ├── css/style.css           # 现代化玻璃拟态暗色主题样式
-│   └── js/app.js               # 前端交互逻辑、实时轮询与设置管理
+│   ├── css/style.css           # 暗色玻璃拟态样式，含主机条
+│   └── js/app.js               # 首页逻辑：主机条 15s 轮询、任务卡、设置
 ├── templates/
-│   ├── index.html              # 主控面板 UI（目标平台选择、二创折叠面板、系统设置）
-│   └── login.html              # 后台管理登录界面
-└── tests/
-    └── test_youtobi.py         # 全量单元测试与沙箱测试套件 (24 passed)
+│   ├── index.html              # 控制台（主机条、提交、二创、任务列表、设置）
+│   └── login.html              # 管理登录
+├── tests/
+│   └── test_youtobi.py         # unittest 套件，26 个测试方法
+├── cookiecloud-cloudflare/     # 可选的 Cloudflare CookieCloud 服务端
+└── docs/
+    ├── images/                 # 本 README 的界面截图
+    ├── plans/
+    └── specs/
 ```
+
+运行时文件 `config.json`、`tasks.json`、`downloads/` 被 `.gitignore` 忽略。
 
 ---
 
@@ -73,68 +135,101 @@ youtobi/
 
 ### 1. 环境准备
 - **操作系统**：Linux / macOS / Windows
-- **Python**：Python 3.10+
-- **系统依赖**：必须预装 `ffmpeg` 与 `ffprobe`
-  ```bash
-  # Ubuntu / Debian
-  sudo apt-get update && sudo apt-get install -y ffmpeg
+- **Python**：3.10+
+- **系统依赖**：`ffmpeg` 与 `ffprobe`
 
-  # macOS
-  brew install ffmpeg
-  ```
+```bash
+# Ubuntu / Debian
+sudo apt-get update && sudo apt-get install -y ffmpeg
+
+# macOS
+brew install ffmpeg
+```
 
 ### 2. 安装与运行
+
+仓库默认分支是 **`master`**。
+
 ```bash
-# 克隆仓库
 git clone https://github.com/rayleeafar/youtobi.git
 cd youtobi
 
-# 创建并激活虚拟环境
 python3 -m venv venv
 source venv/bin/activate
-
-# 安装依赖
 pip install -r requirements.txt
 
-# 启动服务 (默认监听 8166 端口)
 python3 app.py
 ```
-启动后在浏览器访问 `http://localhost:8166`（默认初始管理员密码为 `admin`，可在设置中修改）。
+
+服务监听 `0.0.0.0:8166`。浏览器打开 `http://localhost:8166`。初始管理员密码是 `admin`（`config.example.json` / 默认配置），登录后可在设置里修改。会话 Cookie 名为 `youtobi_session`。
+
+除 `/login`、`POST /api/auth/login`、`/oauth2callback` 和静态资源外，页面与 `/api/*` 都要先登录。
 
 ---
 
 ## ⚙️ 详细配置指南 (Configuration Guide)
 
-在 Web 界面右上角点击 **设置 (⚙️)**，可进行各项配置：
+右上角 **设置与配置** 写入 `POST /api/config`。下面只列字段名，不要把真实 Key、Cookie 或 Token 提交进仓库。示例见 `config.example.json`。
 
-### 1. YouTube Data API v3 自动发布配置
-1. 访问 [Google Cloud Console](https://console.cloud.google.com/) 创建项目。
-2. 在 **API 和服务 -> 库** 中搜索并启用 `YouTube Data API v3`。
-3. 在 **OAuth 同意屏幕 (OAuth consent screen)** 中：
-   - 用户类型选择「外部」。
-   - 范围添加 `https://www.googleapis.com/auth/youtube.upload` 与 `https://www.googleapis.com/auth/youtube.readonly`。
-   - 在「测试用户 (Test users)」中添加您要用于发布视频的 Google 账号邮箱。
-4. 在 **凭据 (Credentials)** 中创建 **OAuth 2.0 客户端 ID**（应用类型选 Web 应用）：
-   - **已获授权的重定向 URI (Authorized redirect URIs)** 填写：
-     - 公网地址示例：`https://your-domain.com/oauth2callback`
-     - 本地测试示例：`http://localhost:8166/oauth2callback`
-5. 将生成的 **Client ID** 和 **Client Secret** 填入 `youtobi` 设置，点击 **🔑 生成授权链接并登录**，在新标签页确认授权后系统将自动换取并存储 Refresh Token。
-6. 点击 **🧪 测试 YouTube API 连通性**，看到频道名称即代表配置成功。
+### 1. YouTube Data API v3
+1. 在 [Google Cloud Console](https://console.cloud.google.com/) 建项目，启用 YouTube Data API v3。
+2. OAuth 同意屏幕选外部，加上范围 `https://www.googleapis.com/auth/youtube.upload` 和 `https://www.googleapis.com/auth/youtube.readonly`，并把发布用的 Google 账号加为测试用户。
+3. 创建 Web 应用 OAuth 客户端。已授权重定向 URI：
+   - 公网：`https://your-domain.com/oauth2callback`
+   - 本机：`http://localhost:8166/oauth2callback`
+4. 把 Client ID 和 Client Secret 填进设置，用 **生成授权链接并登录**。回调页换到 Refresh Token。
+5. **测试 YouTube API 连通性**（`POST /api/youtube/test`）能返回频道名即表示可用。
 
-### 2. Bilibili 发布凭据
-- 可直接手动填写 `SESSDATA`、`bili_jct`、`DedeUserID`。
-- 或配置 **CookieCloud** 的服务器地址、UUID 与密码，点击 **一键同步** 自动获取并持久化。
+### 2. Bilibili 与 CookieCloud
+- 手填 `SESSDATA`、`bili_jct`、`DedeUserID`，或填 CookieCloud 的 URL、UUID、密码后点同步。
+- **检查 B 站登录** 走 `POST /api/bilibili/check`。
+- YouTube 下载用的 Netscape Cookie 存在 `youtube_cookies`，可由 CookieCloud 同步覆盖。
 
-### 3. AI 简介与字幕翻译 (LLM & Whisper)
-- 支持输入任意兼容 OpenAI 规范的 API Key、Base URL（如 `https://api.openai.com/v1`、`https://api.deepseek.com` 等）与模型名称。
-- 支持开启 Whisper 语音转文字能力。
+### 3. LLM、Whisper 与编码
+- LLM：`llm_enabled`、`llm_provider`、`llm_api_key`、`llm_base_url`（如 `https://api.openai.com/v1`）、`llm_model`（默认 `gpt-4o-mini`）。
+- Whisper：`whisper_enabled`（默认开）、`whisper_api_key`、`whisper_base_url`、`whisper_model`。
+- `ffmpeg_preset` 默认 `fast`。`subtitle_burn_in` 与 `subtitle_font_size`（默认 22）在配置里，烧录由流水线按「是否需要中文字幕」决定。
+- `downloads_dir` 不可写时会退回项目下的 `downloads/`。
+
+---
+
+## 🔌 主要接口 (HTTP API)
+
+全部业务接口都经过登录中间件。下面是 `app.py` 里实际注册的路由：
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| `POST` | `/api/auth/login` | 登录（匿名可访问） |
+| `POST` | `/api/auth/logout` | 退出 |
+| `GET` | `/api/system/stats` | 主机资源与公网 IP |
+| `POST` | `/api/tasks` | 按 URL / 播放列表创建任务并立即开跑 |
+| `GET` | `/api/tasks` | 任务列表 |
+| `GET` | `/api/tasks/{task_id}` | 单条任务 |
+| `POST` | `/api/tasks/{task_id}/start` | 启动（进度归零，保留日志，重新同步 Cookie） |
+| `POST` | `/api/tasks/{task_id}/stop` | 暂停 |
+| `POST` | `/api/tasks/{task_id}/retry` | 重试（进度归零，清空日志，重新同步 Cookie） |
+| `POST` | `/api/tasks/{task_id}/cancel` | 取消 |
+| `POST` | `/api/tasks/{task_id}/skip_subtitles` | 切换跳过字幕 |
+| `DELETE` | `/api/tasks/{task_id}` | 删除任务与本地文件 |
+| `GET` | `/api/tasks/{task_id}/stream` | 预览视频 |
+| `GET` / `POST` | `/api/config` | 读取（脱敏）/ 保存配置 |
+| `POST` | `/api/cookiecloud/sync` | 手动同步 Cookie |
+| `POST` | `/api/llm/models` | 列出模型 |
+| `POST` | `/api/llm/test` | 试调 LLM |
+| `POST` | `/api/bilibili/check` | 检查 B 站登录 |
+| `POST` | `/api/youtube/auth-url` | 生成 OAuth 链接 |
+| `POST` | `/api/youtube/oauth-callback` | 用 code 换 Token |
+| `GET` | `/oauth2callback` | Google 重定向落地页（匿名可访问） |
+| `POST` | `/api/youtube/test` | 测试 YouTube 频道 |
 
 ---
 
 ## 🚢 生产环境部署 (Production Deployment)
 
-### Systemd 服务示例
-创建 `/etc/systemd/system/youtobi.service`：
+### systemd
+
+`/etc/systemd/system/youtobi.service`：
+
 ```ini
 [Unit]
 Description=youtobi YouTube to Bilibili Automation Engine
@@ -153,14 +248,16 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-启动并设置开机自启：
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now youtobi
 sudo systemctl status youtobi
 ```
 
-### Nginx 反向代理配置示例
+`app.py` 自带 `reload=True`，生产里如果要关掉热重载，用同一模块直接跑 uvicorn：`uvicorn app:app --host 0.0.0.0 --port 8166`。
+
+### Nginx
+
 ```nginx
 server {
     listen 80;
@@ -187,22 +284,23 @@ server {
 }
 ```
 
+OAuth 重定向 URI 要和浏览器实际访问的域名一致。
+
 ---
 
-## 🧪 测试与质量保证 (Testing)
+## 🧪 测试 (Testing)
 
-项目配备了完善的单元与集成测试，涵盖配置管理、任务生命周期、FFmpeg 滤镜图生成、断点续传、OAuth 回调、解密兼容等各个维度：
+`tests/test_youtobi.py` 里有 **26** 个 `unittest` 测试方法，覆盖配置、登录、主机统计（含未登录 401、公网 IP 回退与缓存）、任务生命周期、字幕 / Whisper、B 站分 P、CookieCloud 解密、LLM、FFmpeg 滤镜、YouTube OAuth 与双平台编排。
 
 ```bash
-# 运行完整测试套件
-PYTHONPATH=. pytest tests/
+PYTHONPATH=. python -m unittest tests.test_youtobi
 ```
 
-测试执行时自动在临时沙箱目录中运行，绝不读写或破坏现有的生产配置文件 `config.json` 与任务历史 `tasks.json`。
+`setUpClass` 把配置和任务文件换到临时目录，结束时再改回去，避免覆盖本机的 `config.json` 和 `tasks.json`。
 
 ---
 
 ## 📄 许可与声明 (License & Disclaimer)
 
-- 本项目采用 [MIT License](LICENSE) 开源许可。
-- **免责声明**：本项目仅供个人学习、技术研究与合法授权的内容创作工作流自动化使用。使用者在使用本工具下载或发布视频时，须严格遵守 YouTube、Bilibili 等各平台的服务条款（Terms of Service）以及当地版权法律法规，严禁将本工具用于任何侵犯第三方知识产权的非法用途。
+- 本项目采用 [MIT License](LICENSE)。
+- **免责声明**：本项目仅供个人学习、技术研究与合法授权的内容创作工作流自动化使用。下载或发布视频时须遵守 YouTube、Bilibili 的服务条款以及当地版权法律，禁止用于侵犯他人知识产权。
