@@ -242,7 +242,10 @@ python3 app.py
 
 ---
 
-## 🚢 生产环境部署 (Production Deployment)
+## 🚢 生产环境部署与跨主机迁移 (Deployment & Migration)
+
+> 💡 **详细部署与跨机器迁移避坑指南**：请参阅完整文档 [docs/deployment_and_migration_guide.md](docs/deployment_and_migration_guide.md)。  
+> 新机器可直接执行仓库自带的一键环境安装脚本：`./scripts/setup_host.sh`（自动安装系统依赖、Deno 运行时、创建 Python venv 及 `yt-dlp-ejs`）。
 
 ### systemd
 
