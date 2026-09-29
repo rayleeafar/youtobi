@@ -1193,6 +1193,177 @@ Second subtitle line
             self.assertTrue(data["bilibili_check"]["valid"])
 
 
+    def test_ytdlp_progress_hook_reports_bytes_speed_and_known_total_only(self):
+        from unittest.mock import patch
+
+        seen = []
+
+        class FakeYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def extract_info(self, url, download=True):
+                hook = self.opts["progress_hooks"][0]
+                hook({
+                    "status": "downloading",
+                    "downloaded_bytes": 500,
+                    "total_bytes": 1000,
+                    "total_bytes_estimate": 5,
+                    "speed": 100,
+                })
+                hook({
+                    "status": "downloading",
+                    "downloaded_bytes": 2048,
+                    "total_bytes_estimate": 999999,
+                    "speed": 256,
+                })
+                hook({
+                    "status": "finished",
+                    "downloaded_bytes": 2048,
+                    "total_bytes": 2048,
+                    "speed": 512,
+                })
+                video = Path(service.downloads_dir) / "hook1" / "abc.mp4"
+                video.parent.mkdir(parents=True, exist_ok=True)
+                video.write_bytes(b"abc")
+                return {"id": "abc"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = YouTubeService(Path(tmp))
+            service.progress_callback = seen.append
+            with patch("services.youtube.yt_dlp.YoutubeDL", FakeYDL):
+                service.download_video_and_subtitles("https://youtu.be/abc", "hook1")
+
+        self.assertEqual(seen[0]["downloaded_bytes"], 500)
+        self.assertEqual(seen[0]["total_bytes"], 1000)
+        self.assertEqual(seen[0]["percent"], 50.0)
+        self.assertEqual(seen[0]["speed"], 100.0)
+        self.assertIsNone(seen[1]["percent"])
+        self.assertIsNone(seen[1]["total_bytes"])
+        self.assertEqual(seen[1]["downloaded_bytes"], 2048)
+        self.assertEqual(seen[1]["speed"], 256.0)
+        self.assertEqual(seen[2]["status"], "finished")
+        self.assertEqual(seen[2]["percent"], 100.0)
+        self.assertIsNone(seen[2]["speed"])
+
+    def test_task_card_payload_shows_live_download_speed_only_while_downloading(self):
+        from unittest.mock import patch
+        from services.task_manager import Task
+        from services.youtube import progress_from_hook
+
+        snapshot = self._config_snapshot()
+        config_manager.update({
+            "cookiecloud_url": "",
+            "cookiecloud_uuid": "",
+            "cookiecloud_password": "",
+            "llm_enabled": False,
+        })
+        task = Task("dlcard", "https://youtu.be/dlcard", skip_subtitles=True)
+        task._manager = task_manager
+        task_manager.tasks[task.id] = task
+        seen = {}
+        try:
+            task.current_stage = "download"
+            task.status = "DOWNLOADING"
+            task.progress = 10
+            task.set_download_progress(progress_from_hook({
+                "status": "downloading",
+                "downloaded_bytes": 500000,
+                "total_bytes": 1000000,
+                "speed": 2097152,
+            }))
+            live = self.client.get("/api/tasks").json()["tasks"]
+            live_task = next(item for item in live if item["id"] == task.id)
+            self.assertEqual(live_task["download_progress"]["percent"], 50.0)
+            self.assertEqual(live_task["download_progress"]["speed"], 2097152.0)
+            self.assertEqual(live_task["download_progress"]["downloaded_bytes"], 500000)
+            self.assertEqual(live_task["youtube_url"], task.youtube_url)
+            self.assertEqual(task.progress, 10)
+
+            task.set_download_progress(progress_from_hook({
+                "status": "downloading",
+                "downloaded_bytes": 4096,
+                "total_bytes_estimate": 999999,
+                "speed": 512,
+            }))
+            unknown = task.to_dict()["download_progress"]
+            self.assertIsNone(unknown["percent"])
+            self.assertIsNone(unknown["total_bytes"])
+            self.assertEqual(unknown["downloaded_bytes"], 4096)
+            self.assertEqual(unknown["speed"], 512.0)
+            self.assertNotEqual(task.progress, 100)
+
+            task_manager.stop_task(task.id)
+            paused = self.client.get(f"/api/tasks/{task.id}").json()["task"]["download_progress"]
+            self.assertEqual(paused["downloaded_bytes"], 4096)
+            self.assertIsNone(paused["speed"])
+            self.assertIsNone(paused["percent"])
+
+            reloaded = Task.from_dict(live_task)
+            reloaded._manager = task_manager
+            task_manager.tasks[task.id] = reloaded
+            restored = reloaded.to_dict()["download_progress"]
+            self.assertEqual(restored["percent"], 50.0)
+            self.assertIsNone(restored["speed"])
+
+            task_manager._enter(reloaded, "subtitles", "SUBTITLE_PROCESSING", 40)
+            self.assertIsNone(reloaded.to_dict()["download_progress"])
+
+            failed = Task("dlfail", "https://youtu.be/dlfail", skip_subtitles=True)
+            failed._manager = task_manager
+            task_manager.tasks[failed.id] = failed
+
+            def fake_download(url, task_id):
+                callback = mock_yt.progress_callback
+                callback(progress_from_hook({
+                    "status": "downloading",
+                    "downloaded_bytes": 500000,
+                    "total_bytes": 1000000,
+                    "speed": 1000,
+                }))
+                seen["live"] = failed.to_dict()["download_progress"]
+                callback(progress_from_hook({
+                    "status": "finished",
+                    "downloaded_bytes": 1000000,
+                    "total_bytes": 1000000,
+                    "speed": 1000,
+                }))
+                seen["finished"] = failed.to_dict()["download_progress"]
+                raise RuntimeError("download failed")
+
+            with patch("services.task_manager.YouTubeService") as mock_yt_cls:
+                mock_yt = mock_yt_cls.return_value
+                mock_yt.extract_info.return_value = {
+                    "id": "dlfail",
+                    "url": failed.youtube_url,
+                    "title": "Prog",
+                    "description": "",
+                    "language": "en",
+                    "is_chinese": False,
+                }
+                mock_yt.download_video_and_subtitles.side_effect = fake_download
+                task_manager._run_task_pipeline(failed)
+
+            self.assertEqual(seen["live"]["percent"], 50.0)
+            self.assertEqual(seen["live"]["speed"], 1000.0)
+            self.assertEqual(seen["finished"]["percent"], 100.0)
+            self.assertIsNone(seen["finished"]["speed"])
+            self.assertEqual(failed.status, "FAILED")
+            self.assertEqual(failed.current_stage, "download")
+            self.assertIsNone(failed.to_dict()["download_progress"]["speed"])
+            self.assertNotIn("download", failed.completed_stages)
+        finally:
+            task_manager.tasks.pop("dlcard", None)
+            task_manager.tasks.pop("dlfail", None)
+            config_manager.update(snapshot)
+
+
 if __name__ == "__main__":
     unittest.main()
 
