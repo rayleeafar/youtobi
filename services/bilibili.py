@@ -355,6 +355,12 @@ class BilibiliService:
             if venv_biliup.exists():
                 biliup_path = str(venv_biliup)
 
+        if not biliup_path:
+            for p in ["/usr/local/bin/biliup", "/usr/bin/biliup", "/home/ray/.cargo/bin/biliup"]:
+                if os.path.isfile(p) and os.access(p, os.X_OK):
+                    biliup_path = p
+                    break
+
         if biliup_path:
             try:
                 if progress_callback:
@@ -457,22 +463,26 @@ class BilibiliService:
 
         # Method C: Web API fallback with robust multi-part support & SPI finger cookies
         try:
-            buivid3 = self.extra_cookies.get("buivid3", "")
-            buivid4 = self.extra_cookies.get("buivid4", "")
-            if not buivid3:
+            buvid3 = self.extra_cookies.get("buvid3") or self.extra_cookies.get("buivid3", "")
+            buvid4 = self.extra_cookies.get("buvid4") or self.extra_cookies.get("buivid4", "")
+            if not buvid3:
                 try:
                     r_spi = requests.get('https://api.bilibili.com/x/frontend/finger/spi', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
                     spi_data = r_spi.json().get('data', {})
-                    buivid3 = spi_data.get('b_3', '')
-                    buivid4 = spi_data.get('b_4', '')
+                    buvid3 = spi_data.get('b_3', '')
+                    buvid4 = spi_data.get('b_4', '')
                 except Exception:
                     pass
 
-            cookie_str = f"SESSDATA={self.sessdata}; bili_jct={self.bili_jct}; DedeUserID={self.dedeuserid}"
-            if buivid3:
-                cookie_str += f"; buivid3={buivid3}"
-            if buivid4:
-                cookie_str += f"; buivid4={buivid4}"
+            cookie_dict = {"SESSDATA": self.sessdata, "bili_jct": self.bili_jct, "DedeUserID": self.dedeuserid}
+            if self.extra_cookies:
+                cookie_dict.update(self.extra_cookies)
+            if buvid3 and "buvid3" not in cookie_dict:
+                cookie_dict["buvid3"] = buvid3
+            if buvid4 and "buvid4" not in cookie_dict:
+                cookie_dict["buvid4"] = buvid4
+
+            cookie_str = "; ".join([f"{k}={v}" for k, v in cookie_dict.items() if v])
 
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

@@ -13,6 +13,8 @@
    - [2.3 历史任务 `tasks.json` 路径硬编码导致断点续跑失败](#23-历史任务-tasksjson-路径硬编码导致断点续跑失败)
    - [2.4 Web 管理员密码重置机制](#24-web-管理员密码重置机制)
    - [2.5 主机磁盘空间暴满与自动化清理](#25-主机磁盘空间暴满与自动化清理)
+   - [2.6 Bilibili 报 "preupload HTTP 403 出错啦/未登录页面"](#26-bilibili-报-preupload-http-403-出错啦未登录页面)
+   - [2.7 前端轮询导致选中文本失去焦点与页面闪烁](#27-前端轮询导致选中文本失去焦点与页面闪烁)
 3. [方案 A：全新机器一步到位部署指南](#3-方案-a全新机器一步到位部署指南)
 4. [方案 B：跨机器数据无损热迁移 SOP](#4-方案-b跨机器数据无损热迁移-sop)
 5. [系统服务与自启动配置 (systemd)](#5-系统服务与自启动配置-systemd)
@@ -32,6 +34,7 @@
 | **Node.js** | 备用 JS 引擎 | `>= 18.0.0` | 作为 Deno 之后的二级备用 JS 运行时。 |
 | **yt-dlp[default]** | Python 包 | `>= 2026.8.19` | 核心下载组件，包含 `pycryptodomex` 加密支持。 |
 | **yt-dlp-ejs** | Python 包 | `>= 0.8.0` | **必须依赖**：EJS 挑战解密插件，缺少此包会导致 YouTube 报错。 |
+| **biliup** | CLI 二进制 | `>= 1.2.10` (装于 `/usr/local/bin/biliup`) | **B站上传核心引擎**：使用 B-Cut Android / UPOS 协议上传视频，规避网页端 403 出错啦拦截。 |
 | **CookieCloud** | 服务/插件 | 独立或自建部署 | 自动拉取更新 YouTube 与 Bilibili 登录态 Cookie。 |
 
 ---
@@ -115,6 +118,34 @@
       [ -n "$snapname" ] && sudo snap remove "$snapname" --revision="$revision"
   done
   ```
+
+---
+
+### 2.6 Bilibili 报 "preupload HTTP 403 出错啦/未登录页面"
+
+* **现象**：
+  视频下载切分完成后，进入 Bilibili 上传阶段，任务报错：
+  `Bilibili upload error: Upload failed: Bilibili preupload HTTP 403: Bilibili 会话验证失败 (HTTP 403 出错啦/未登录页面)，请确认 SESSDATA 有效性`
+* **根本原因**：
+  1. **缺少 `biliup` 引擎**：B站网页版创作者中心（`member.bilibili.com`）对直接模拟 Web 预上传请求（Method C）启用了严格的风控策略（缺少 Wbi 签名、缺少 `DedeUserID__ckMd5` 等完整上下文，或直接对服务器 IP 403 拦截）。
+  2. 当 `biliup` 二进制未安装到系统 PATH 时，程序会降级到网页模拟上传，从而触发该报错。
+* **解决与预防措施**：
+  1. 主机安装官方预编译 `biliup` 二进制到 `/usr/local/bin/biliup`（`./scripts/setup_host.sh` 已自动化集成）。
+  2. `services/bilibili.py` 已增强 `biliup` 显式路径搜索 (`/usr/local/bin/biliup`, `/usr/bin/biliup` 等)，优先采用官方 B-Cut 协议 (`--submit b-cut-android`) 稳定投稿，彻底规避 Web 403 拦截。
+  3. Method C 中已补齐 `buvid3`/`buvid4` 字段纠错与全量 Cookie 传递支持。
+
+---
+
+### 2.7 前端轮询导致选中文本失去焦点与页面闪烁
+
+* **现象**：
+  在 Web 控制台查看任务列表时，想要选中文本（如复制错误日志或视频链接），每过 3 秒页面就会刷新一次，导致选中的文字自动失去焦点被清除。
+* **根本原因**：
+  原 `loadTasks()` 在每次 3 秒轮询拉取任务数据后，均直接执行 `container.innerHTML = ...` 全量重构任务列表 DOM，瞬间销毁所有原有 DOM 节点与浏览器的文本选择状态 (`window.getSelection()`)。
+* **解决与预防措施**：
+  1. **主动选择守卫**：在 `loadTasks` 执行前检测 `window.getSelection()`，当用户在任务卡片区域有活动高亮选区时，自动推迟当前周期的 DOM 更新，绝不打断复制操作。
+  2. **JSON 无变动跳过**：当任务列表数据未变动时，完全不触碰 DOM，杜绝无意义重绘。
+  3. **单卡差量更新 (Differential Patching)**：为每张任务卡片绑定 `id="task-card-${id}"`，仅当该任务卡片数据实际发生变化时，精准替换对应单张卡片节点，其他卡片与页面焦点完全不受干扰。
 
 ---
 

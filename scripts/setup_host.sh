@@ -84,7 +84,27 @@ else
     echo "⚠️ 警告: Deno 未能成功安装到 /usr/local/bin/deno，yt-dlp 将尝试回退使用 node。"
 fi
 
-# 5. 设置 Python 虚拟环境
+# 5. 安装/检查 biliup 引擎 (Bilibili 视频上传核心命令行工具)
+if ! command -v biliup >/dev/null 2>&1 && [ ! -f "/usr/local/bin/biliup" ]; then
+    echo "📦 正在安装 biliup 到 /usr/local/bin/biliup (解决 B站 Web 上传 403 出错啦/会话验证失败)..."
+    ARCH="$(uname -m)"
+    if [ "$ARCH" = "x86_64" ]; then
+        BILIUP_TMP="$(mktemp -d)"
+        BILIUP_URL="https://github.com/biliup/biliup/releases/download/v1.2.10/biliupR-v1.2.10-x86_64-linux.tar.xz"
+        if curl -fsSL "$BILIUP_URL" -o "${BILIUP_TMP}/biliup.tar.xz"; then
+            tar -xJf "${BILIUP_TMP}/biliup.tar.xz" -C "${BILIUP_TMP}"
+            $SUDO install -m 755 "${BILIUP_TMP}"/biliupR-*/biliup /usr/local/bin/biliup
+            rm -rf "${BILIUP_TMP}"
+        fi
+    fi
+fi
+
+if command -v biliup >/dev/null 2>&1 || [ -f "/usr/local/bin/biliup" ]; then
+    BILIUP_BIN="$(command -v biliup || echo /usr/local/bin/biliup)"
+    echo "✅ biliup 安装就绪: $("$BILIUP_BIN" --version 2>&1 | head -n 1)"
+fi
+
+# 6. 设置 Python 虚拟环境
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${PROJECT_DIR}/venv"
 

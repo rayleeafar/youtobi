@@ -544,41 +544,114 @@ async function loadTasks() {
     if (!data.success) return;
 
     const container = document.getElementById('taskList');
-    if (!data.tasks || data.tasks.length === 0) {
-      container.innerHTML = `
-        <div class="task-card" style="text-align: center; color: var(--text-muted); padding: 3rem;">
-          暂无活动任务，请在上方输入 YouTube 视频或播放列表链接开始。
-        </div>`;
+    if (!container) return;
+
+    const currentTasksJson = JSON.stringify(data.tasks || []);
+
+    // 1. Guard against interrupting active text selection
+    const selection = window.getSelection();
+    const hasSelectionInTaskList = selection &&
+      !selection.isCollapsed &&
+      selection.rangeCount > 0 &&
+      container.contains(selection.anchorNode);
+
+    if (hasSelectionInTaskList) {
+      // User is currently selecting text inside the task list (e.g. copying error message or logs)
+      // Defer DOM mutation to prevent wiping selection and losing focus
       return;
     }
 
-    // Preserve scroll positions of log terminals
-    const scrollStates = {};
-    container.querySelectorAll('.log-terminal[data-task-id]').forEach(el => {
-      const taskId = el.getAttribute('data-task-id');
-      const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-      scrollStates[taskId] = {
-        scrollTop: el.scrollTop,
-        isAtBottom: isAtBottom
-      };
-    });
+    // 2. If nothing changed, do not touch DOM
+    if (container._lastTasksJson === currentTasksJson) {
+      return;
+    }
 
-    container.innerHTML = data.tasks.map(task => renderTaskCard(task)).join('');
+    // 3. Handle empty task list
+    if (!data.tasks || data.tasks.length === 0) {
+      if (!container.querySelector('#emptyTaskListPlaceholder')) {
+        container.innerHTML = `
+          <div id="emptyTaskListPlaceholder" class="task-card" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+            暂无活动任务，请在上方输入 YouTube 视频或播放列表链接开始。
+          </div>`;
+      }
+      container._lastTasksJson = currentTasksJson;
+      return;
+    }
+    const emptyPlaceholder = container.querySelector('#emptyTaskListPlaceholder');
+    if (emptyPlaceholder) emptyPlaceholder.remove();
 
-    // Restore scroll position or auto-scroll to bottom
-    container.querySelectorAll('.log-terminal[data-task-id]').forEach(el => {
-      const taskId = el.getAttribute('data-task-id');
-      const saved = scrollStates[taskId];
-      if (saved) {
-        if (saved.isAtBottom) {
-          el.scrollTop = el.scrollHeight;
-        } else {
-          el.scrollTop = saved.scrollTop;
-        }
-      } else {
-        el.scrollTop = el.scrollHeight;
+    // 4. Differential update: remove obsolete cards
+    const currentTaskIds = new Set(data.tasks.map(t => t.id));
+    container.querySelectorAll('.task-card[data-task-id]').forEach(el => {
+      const id = el.getAttribute('data-task-id');
+      if (!currentTaskIds.has(id)) {
+        el.remove();
       }
     });
+
+    // 5. Update changed cards or insert new cards in order
+    let prevCard = null;
+    data.tasks.forEach(task => {
+      const taskJson = JSON.stringify(task);
+      let card = document.getElementById(`task-card-${task.id}`);
+
+      if (card) {
+        if (card._taskJson !== taskJson) {
+          // If user selection happens to be inside this specific card, postpone updating it
+          if (selection && !selection.isCollapsed && selection.rangeCount > 0 && card.contains(selection.anchorNode)) {
+            // Keep card untouched for now
+          } else {
+            const terminal = card.querySelector('.log-terminal[data-task-id]');
+            let scrollSaved = null;
+            if (terminal) {
+              scrollSaved = {
+                scrollTop: terminal.scrollTop,
+                isAtBottom: terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 30
+              };
+            }
+
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = renderTaskCard(task);
+            const newCard = tempDiv.firstElementChild;
+            newCard._taskJson = taskJson;
+            card.replaceWith(newCard);
+            card = newCard;
+
+            if (scrollSaved) {
+              const newTerminal = card.querySelector('.log-terminal[data-task-id]');
+              if (newTerminal) {
+                if (scrollSaved.isAtBottom) {
+                  newTerminal.scrollTop = newTerminal.scrollHeight;
+                } else {
+                  newTerminal.scrollTop = scrollSaved.scrollTop;
+                }
+              }
+            }
+          }
+        }
+      } else {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = renderTaskCard(task);
+        card = tempDiv.firstElementChild;
+        card._taskJson = taskJson;
+
+        const terminal = card.querySelector('.log-terminal[data-task-id]');
+        if (terminal) {
+          terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        if (prevCard && prevCard.nextSibling) {
+          container.insertBefore(card, prevCard.nextSibling);
+        } else if (!prevCard) {
+          container.insertBefore(card, container.firstChild);
+        } else {
+          container.appendChild(card);
+        }
+      }
+      prevCard = card;
+    });
+
+    container._lastTasksJson = currentTasksJson;
   } catch (err) {
     console.error('Error loading tasks:', err);
   }
@@ -705,7 +778,7 @@ function renderTaskCard(task) {
   }
 
   return `
-    <div class="task-card">
+    <div class="task-card" id="task-card-${task.id}" data-task-id="${task.id}">
       <div class="task-header">
         <div>
           <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;">
