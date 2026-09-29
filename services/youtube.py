@@ -118,13 +118,25 @@ class YouTubeService:
             "writesubtitles": True,
             "writeautomaticsub": True,
             "remote_components": ["ejs:github"],
+            "js_runtimes": {"deno": None, "node": None},
         }
         cookie_file = self._get_cookie_file()
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            err_msg = str(e)
+            if cookie_file and any(ind in err_msg for ind in ["The page needs to be reloaded", "cookies are no longer valid", "not a bot"]):
+                logger.warning(f"YouTube cookies rejected ({err_msg}). Retrying extract_info without cookies...")
+                ydl_opts_fallback = ydl_opts.copy()
+                ydl_opts_fallback.pop("cookiefile", None)
+                with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:
+                raise
             
         title = info.get("title", "Untitled")
         description = info.get("description", "")
@@ -181,13 +193,25 @@ class YouTubeService:
             "subtitleslangs": ["zh", "zh-CN", "zh-TW", "en", "auto"],
             "merge_output_format": "mp4",
             "remote_components": ["ejs:github"],
+            "js_runtimes": {"deno": None, "node": None},
         }
         cookie_file = self._get_cookie_file()
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        except Exception as e:
+            err_msg = str(e)
+            if cookie_file and any(ind in err_msg for ind in ["The page needs to be reloaded", "cookies are no longer valid", "not a bot"]):
+                logger.warning(f"YouTube cookies rejected during download ({err_msg}). Retrying download without cookies...")
+                ydl_opts_fallback = ydl_opts.copy()
+                ydl_opts_fallback.pop("cookiefile", None)
+                with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                    info = ydl.extract_info(url, download=True)
+            else:
+                raise
 
         video_id = info.get("id")
         
