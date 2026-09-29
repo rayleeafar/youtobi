@@ -93,6 +93,9 @@ class Task:
         self.stage_artifacts: Dict[str, Any] = {}
         self.last_error: Optional[str] = None
         self.resume_from: Optional[str] = None
+        # Live yt-dlp counters. download_live is process-local and never restored.
+        self.download_progress: Optional[Dict[str, Any]] = None
+        self.download_live: bool = False
 
     def set_error(self, message: Optional[str]):
         self.error_message = message
@@ -137,7 +140,40 @@ class Task:
             "stage_artifacts": self.stage_artifacts,
             "last_error": self.last_error,
             "resume_from": self.resume_from,
+            "download_progress": self._download_progress_view(),
         }
+
+    def set_download_progress(self, info: Optional[Dict[str, Any]]):
+        if not info:
+            self.download_progress = None
+            self.download_live = False
+            return
+        status = info.get("status")
+        live = status == "downloading"
+        total = info.get("total_bytes")
+        percent = info.get("percent") if total else None
+        self.download_progress = {
+            "status": status,
+            "downloaded_bytes": info.get("downloaded_bytes"),
+            "total_bytes": total,
+            "percent": percent,
+            "speed": info.get("speed") if live else None,
+        }
+        self.download_live = live
+
+    def _download_progress_view(self) -> Optional[Dict[str, Any]]:
+        info = self.download_progress
+        if not info or self.current_stage != "download":
+            return None
+        live = bool(
+            self.download_live
+            and self.status == "DOWNLOADING"
+            and info.get("status") == "downloading"
+        )
+        view = dict(info)
+        if not live:
+            view["speed"] = None
+        return view
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Task":
@@ -173,6 +209,17 @@ class Task:
         if task.error_message is None:
             task.error_message = task.last_error
         task.resume_from = data.get("resume_from")
+        raw_progress = data.get("download_progress")
+        if isinstance(raw_progress, dict):
+            total = raw_progress.get("total_bytes")
+            task.download_progress = {
+                "status": raw_progress.get("status"),
+                "downloaded_bytes": raw_progress.get("downloaded_bytes"),
+                "total_bytes": total,
+                "percent": raw_progress.get("percent") if total else None,
+                "speed": None,
+            }
+        task.download_live = False
 
         return task
 
@@ -435,6 +482,10 @@ class TaskManager:
         task.current_stage = stage
         task.status = status
         task.progress = progress
+        # Entering any stage drops the previous download snapshot. The download
+        # stage fills it again from yt-dlp hooks.
+        task.download_progress = None
+        task.download_live = False
         self.save_tasks()
         return True
 
@@ -641,7 +692,18 @@ class TaskManager:
                     return
                 self._invalidate(task, "download")
                 task.log("Downloading video file and subtitles...")
-                video_file, sub_file, _ = yt_service.download_video_and_subtitles(task.youtube_url, task.id)
+
+                def _on_download_progress(info):
+                    if task.cancelled:
+                        task.download_live = False
+                        return
+                    task.set_download_progress(info)
+
+                yt_service.progress_callback = _on_download_progress
+                try:
+                    video_file, sub_file, _ = yt_service.download_video_and_subtitles(task.youtube_url, task.id)
+                finally:
+                    task.download_live = False
                 task.progress = 35
                 self._complete(task, "download", {
                     "video_path": str(video_file),
@@ -907,6 +969,7 @@ class TaskManager:
                     task.log(f"Warning: Auto-deletion of task video files failed: {clean_err}")
 
         except Exception as e:
+            task.download_live = False
             if task.cancelled:
                 task.log("Pipeline stopped due to cancellation.")
                 return

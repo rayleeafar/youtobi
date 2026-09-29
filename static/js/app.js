@@ -584,6 +584,31 @@ async function loadTasks() {
   }
 }
 
+function formatDownloadPercent(percent) {
+  const rounded = Math.round(percent * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function renderDownloadStatus(task) {
+  const dp = task.download_progress;
+  if (!dp || task.current_stage !== 'download') return '';
+  const total = dp.total_bytes;
+  const downloaded = dp.downloaded_bytes;
+  const knownTotal = typeof total === 'number' && total > 0 && typeof dp.percent === 'number';
+  const hasBytes = typeof downloaded === 'number' && downloaded >= 0;
+  if (!knownTotal && !hasBytes) return '';
+  const live = task.status === 'DOWNLOADING'
+    && dp.status === 'downloading'
+    && typeof dp.speed === 'number'
+    && Number.isFinite(dp.speed)
+    && dp.speed >= 0;
+  const speedText = live ? ` · ${formatBytes(dp.speed)}/s` : '';
+  const label = knownTotal
+    ? `下载 ${formatDownloadPercent(dp.percent)}%${speedText}`
+    : `已下载 ${formatBytes(downloaded)}${speedText}`;
+  return `<div style="font-size: 0.8rem; color: var(--accent-cyan); margin: -0.65rem 0 0.85rem;">${escapeHtml(label)}</div>`;
+}
+
 function renderTaskCard(task) {
   const statusLabels = {
     'PENDING': '等待处理',
@@ -628,6 +653,7 @@ function renderTaskCard(task) {
   const stageHint = stageHintParts.length
     ? `<div style="font-size: 0.8rem; color: var(--text-muted); margin: -0.25rem 0 0.75rem;">${escapeHtml(stageHintParts.join(' · '))}</div>`
     : '';
+  const downloadStatus = renderDownloadStatus(task);
   const lastError = task.last_error || task.error_message;
   const errorLine = lastError && isStopped
     ? `<div style="font-size: 0.8rem; color: #ff8a80; margin: -0.35rem 0 0.75rem;">上次错误：${escapeHtml(lastError)}</div>`
@@ -701,6 +727,7 @@ function renderTaskCard(task) {
       <div class="progress-bar-container">
         <div class="progress-bar-fill" style="width: ${task.progress}%;"></div>
       </div>
+      ${downloadStatus}
       ${stageHint}
       ${errorLine}
 

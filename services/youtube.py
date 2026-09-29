@@ -1,11 +1,49 @@
 import os
 import glob
+import math
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 import yt_dlp
 
 logger = logging.getLogger("youtobi.youtube")
+
+
+def _byte_count(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return int(value)
+
+
+def progress_from_hook(hook: Dict[str, Any]) -> Dict[str, Any]:
+    """Map one yt-dlp progress hook to card fields.
+
+    Percent is set only from total_bytes. An estimate is not a known size.
+    Speed is included only while status is downloading, so a finished hook's
+    average rate is not shown as a live speed.
+    """
+    status = hook.get("status")
+    downloaded = _byte_count(hook.get("downloaded_bytes"))
+    total = _byte_count(hook.get("total_bytes"))
+    if total is not None and total <= 0:
+        total = None
+    speed = None
+    if status == "downloading":
+        raw_speed = hook.get("speed")
+        if isinstance(raw_speed, (int, float)) and not isinstance(raw_speed, bool) and math.isfinite(raw_speed) and raw_speed >= 0:
+            speed = float(raw_speed)
+    percent = None
+    if downloaded is not None and total:
+        percent = round(min(100.0, downloaded * 100.0 / total), 1)
+    return {
+        "status": status,
+        "downloaded_bytes": downloaded,
+        "total_bytes": total,
+        "speed": speed,
+        "percent": percent,
+    }
 
 class YouTubeService:
     def __init__(self, downloads_dir: Path):
@@ -185,6 +223,14 @@ class YouTubeService:
         cookie_file = self._get_cookie_file()
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file
+        callback = getattr(self, "progress_callback", None)
+        if callback:
+            def _hook(progress):
+                try:
+                    callback(progress_from_hook(progress))
+                except Exception:
+                    logger.debug("download progress callback failed", exc_info=True)
+            ydl_opts["progress_hooks"] = [_hook]
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
