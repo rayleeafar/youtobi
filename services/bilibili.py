@@ -116,14 +116,17 @@ class BilibiliService:
         try:
             res = requests.get(url, cookies=self.get_cookies(), headers=headers, timeout=10)
             data = res.json()
-            if data.get("code") == 0 and data.get("data", {}).get("isLogin"):
-                user_info = data.get("data", {})
+            if not isinstance(data, dict):
+                return {"valid": False, "message": "Invalid response format from Bilibili API."}
+            data_body = data.get("data") or {}
+            if data.get("code") == 0 and isinstance(data_body, dict) and data_body.get("isLogin"):
+                level_info = data_body.get("level_info") or {}
                 return {
                     "valid": True,
-                    "uname": user_info.get("uname"),
-                    "mid": user_info.get("mid"),
-                    "face": user_info.get("face"),
-                    "level": user_info.get("level_info", {}).get("current_level"),
+                    "uname": data_body.get("uname"),
+                    "mid": data_body.get("mid"),
+                    "face": data_body.get("face"),
+                    "level": level_info.get("current_level") if isinstance(level_info, dict) else None,
                 }
             else:
                 return {"valid": False, "message": data.get("message", "Cookie is invalid or expired.")}
@@ -279,12 +282,14 @@ class BilibiliService:
             if progress_callback:
                 progress_callback(20, f"Preparing bilibili-api-python UPOS engine ({len(video_parts)} parts)...")
 
-            buvid3 = self.extra_cookies.get("buvid3") or self.extra_cookies.get("buivid3", "")
-            buvid4 = self.extra_cookies.get("buvid4") or self.extra_cookies.get("buivid4", "")
+            extra = self.extra_cookies or {}
+            buvid3 = extra.get("buvid3") or extra.get("buivid3", "")
+            buvid4 = extra.get("buvid4") or extra.get("buivid4", "")
             if not buvid3:
                 try:
                     r_spi = requests.get('https://api.bilibili.com/x/frontend/finger/spi', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                    spi_data = r_spi.json().get('data', {})
+                    spi_json = r_spi.json()
+                    spi_data = (spi_json.get('data') or {}) if isinstance(spi_json, dict) else {}
                     buvid3 = spi_data.get('b_3', '')
                     buvid4 = spi_data.get('b_4', '')
                 except Exception as e:
@@ -333,7 +338,7 @@ class BilibiliService:
                 return await uploader.start()
 
             res = asyncio.run(_do_upload())
-            bvid = res.get("bvid", "BV_SUCCESS")
+            bvid = (res.get("bvid") if isinstance(res, dict) else None) or "BV_SUCCESS"
             if progress_callback:
                 progress_callback(100, f"Successfully published video ({len(video_parts)} parts) to Bilibili! BVid: {bvid}")
 
@@ -463,12 +468,14 @@ class BilibiliService:
 
         # Method C: Web API fallback with robust multi-part support & SPI finger cookies
         try:
-            buvid3 = self.extra_cookies.get("buvid3") or self.extra_cookies.get("buivid3", "")
-            buvid4 = self.extra_cookies.get("buvid4") or self.extra_cookies.get("buivid4", "")
+            extra = self.extra_cookies or {}
+            buvid3 = extra.get("buvid3") or extra.get("buivid3", "")
+            buvid4 = extra.get("buvid4") or extra.get("buivid4", "")
             if not buvid3:
                 try:
                     r_spi = requests.get('https://api.bilibili.com/x/frontend/finger/spi', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                    spi_data = r_spi.json().get('data', {})
+                    spi_json = r_spi.json()
+                    spi_data = (spi_json.get('data') or {}) if isinstance(spi_json, dict) else {}
                     buvid3 = spi_data.get('b_3', '')
                     buvid4 = spi_data.get('b_4', '')
                 except Exception:
@@ -563,8 +570,9 @@ class BilibiliService:
             except Exception:
                 raise RuntimeError(f"Bilibili submit invalid response (HTTP {r_add.status_code}): {r_add.text[:200]}")
 
-            if res_json.get("code") == 0:
-                bvid = res_json.get("data", {}).get("bvid", "BV_SUCCESS")
+            if isinstance(res_json, dict) and res_json.get("code") == 0:
+                res_data = res_json.get("data") or {}
+                bvid = res_data.get("bvid", "BV_SUCCESS") if isinstance(res_data, dict) else "BV_SUCCESS"
                 if progress_callback:
                     progress_callback(100, f"Successfully published video ({len(video_parts)} parts) to Bilibili!")
                 return {
@@ -575,8 +583,9 @@ class BilibiliService:
                     "tags": tags
                 }
             else:
-                msg = res_json.get("message", "Failed to submit video metadata.")
-                raise RuntimeError(f"Bilibili API error ({res_json.get('code')}): {msg}")
+                msg = res_json.get("message", "Failed to submit video metadata.") if isinstance(res_json, dict) else "Failed to submit video metadata."
+                code = res_json.get('code') if isinstance(res_json, dict) else -1
+                raise RuntimeError(f"Bilibili API error ({code}): {msg}")
 
         except Exception as e:
             logger.error(f"Bilibili upload error: {e}")
