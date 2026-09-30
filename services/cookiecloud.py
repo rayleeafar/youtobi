@@ -170,6 +170,9 @@ class CookieCloudService:
         except Exception as e:
             raise ValueError(f"解密数据 JSON 解析失败: {e}")
 
+        if not isinstance(cookie_json, dict):
+            cookie_json = {}
+
         cookie_data_root = cookie_json.get("cookie_data") or cookie_json.get("cookies") or cookie_json
         all_cookies = self._extract_all_cookie_items(cookie_data_root)
 
