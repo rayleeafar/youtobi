@@ -115,16 +115,18 @@ class YouTubeUploaderService:
             raise RuntimeError("No YouTube channel found associated with this Google account.")
 
         ch = items[0]
-        snippet = ch.get("snippet", {})
-        stats = ch.get("statistics", {})
+        snippet = ch.get("snippet") or {} if isinstance(ch, dict) else {}
+        stats = ch.get("statistics") or {} if isinstance(ch, dict) else {}
+        thumbnails = snippet.get("thumbnails") or {} if isinstance(snippet, dict) else {}
+        default_thumb = thumbnails.get("default") or {} if isinstance(thumbnails, dict) else {}
         return {
-            "channel_id": ch.get("id"),
-            "title": snippet.get("title", "Unknown"),
-            "description": snippet.get("description", ""),
-            "custom_url": snippet.get("customUrl", ""),
-            "subscriber_count": stats.get("subscriberCount", "0"),
-            "video_count": stats.get("videoCount", "0"),
-            "thumbnail": snippet.get("thumbnails", {}).get("default", {}).get("url", "")
+            "channel_id": ch.get("id") if isinstance(ch, dict) else None,
+            "title": snippet.get("title", "Unknown") if isinstance(snippet, dict) else "Unknown",
+            "description": snippet.get("description", "") if isinstance(snippet, dict) else "",
+            "custom_url": snippet.get("customUrl", "") if isinstance(snippet, dict) else "",
+            "subscriber_count": stats.get("subscriberCount", "0") if isinstance(stats, dict) else "0",
+            "video_count": stats.get("videoCount", "0") if isinstance(stats, dict) else "0",
+            "thumbnail": default_thumb.get("url", "") if isinstance(default_thumb, dict) else ""
         }
 
     def _initiate_resumable_upload(
@@ -297,7 +299,7 @@ class YouTubeUploaderService:
             progress_callback=progress_callback
         )
 
-        video_id = upload_res.get("id")
+        video_id = upload_res.get("id") if isinstance(upload_res, dict) else None
         if not video_id:
             raise RuntimeError(f"YouTube upload succeeded but no video id in response: {upload_res}")
 
