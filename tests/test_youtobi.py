@@ -1363,6 +1363,57 @@ Second subtitle line
             task_manager.tasks.pop("dlfail", None)
             config_manager.update(snapshot)
 
+    def test_bilibili_validate_credentials_null_data(self):
+        from unittest.mock import patch, MagicMock
+        service = BilibiliService(sessdata="fake_sess", bili_jct="fake_jct", dedeuserid="123")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"code": 0, "data": None}
+        with patch("requests.get", return_value=mock_resp):
+            res = service.validate_credentials()
+            self.assertFalse(res["valid"])
+
+    def test_bilibili_validate_credentials_null_level_info(self):
+        from unittest.mock import patch, MagicMock
+        service = BilibiliService(sessdata="fake_sess", bili_jct="fake_jct", dedeuserid="123")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "code": 0,
+            "data": {
+                "isLogin": True,
+                "uname": "TestUser",
+                "mid": 123,
+                "face": "",
+                "level_info": None
+            }
+        }
+        with patch("requests.get", return_value=mock_resp):
+            res = service.validate_credentials()
+            self.assertTrue(res["valid"])
+            self.assertIsNone(res["level"])
+
+    def test_cookiecloud_null_decrypted_json(self):
+        from unittest.mock import patch, MagicMock
+        service = CookieCloudService("https://cc.example.com", "uuid", "pass")
+        with patch("requests.get") as mock_get, \
+             patch.object(service, "_decrypt", return_value="null"):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"encrypted": "dummy", "crypto_type": "legacy"}
+            mock_get.return_value = mock_resp
+            bili, yt = service.fetch_all_synced_cookies()
+            self.assertEqual(bili, {})
+            self.assertEqual(yt, "")
+
+    def test_youtube_extract_info_none_handling(self):
+        from unittest.mock import patch, MagicMock
+        yt = YouTubeService(Path("/tmp"))
+        with patch("yt_dlp.YoutubeDL") as mock_ydl:
+            instance = mock_ydl.return_value.__enter__.return_value
+            instance.extract_info.return_value = None
+            with self.assertRaises(RuntimeError) as ctx:
+                yt.extract_info("https://youtu.be/invalid")
+            self.assertIn("Failed to extract video info", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
