@@ -509,11 +509,12 @@ async def sync_cookiecloud(req: Optional[CookieCloudSyncRequest] = None):
                     dedeuserid=bili_cookies.get("DedeUserID", ""),
                     extra_cookies=bili_cookies
                 )
-                bili_val_result = bili_service.validate_credentials()
-                if bili_val_result.get("valid"):
+                bili_val_result = bili_service.validate_credentials() or {}
+                if isinstance(bili_val_result, dict) and bili_val_result.get("valid"):
                     msg_parts.append(f"Bilibili 登录 Cookie (已验证用户: {bili_val_result.get('uname', '未知')})")
                 else:
-                    msg_parts.append(f"Bilibili 登录 Cookie (⚠️ {bili_val_result.get('message', '账号未登录/凭证已失效')})")
+                    err_msg = bili_val_result.get('message', '账号未登录/凭证已失效') if isinstance(bili_val_result, dict) else '账号未登录/凭证已失效'
+                    msg_parts.append(f"Bilibili 登录 Cookie (⚠️ {err_msg})")
             except Exception:
                 msg_parts.append("Bilibili 登录 Cookie")
         if yt_netscape:
@@ -771,11 +772,14 @@ async def test_youtube_api(req: Optional[YouTubeTestRequest] = None):
             client_secret=client_secret,
             refresh_token=refresh_token
         )
-        ch_info = uploader.get_channel_info()
+        ch_info = uploader.get_channel_info() or {}
+        ch_title = ch_info.get('title', '未知') if isinstance(ch_info, dict) else '未知'
+        ch_url = ch_info.get('custom_url', '') if isinstance(ch_info, dict) else ''
+        ch_subs = ch_info.get('subscriber_count', '0') if isinstance(ch_info, dict) else '0'
         return {
             "success": True,
             "channel": ch_info,
-            "message": f"YouTube API 连接成功！频道: {ch_info.get('title')} ({ch_info.get('custom_url')})，订阅量: {ch_info.get('subscriber_count')}"
+            "message": f"YouTube API 连接成功！频道: {ch_title} ({ch_url})，订阅量: {ch_subs}"
         }
     except Exception as e:
         logger.error(f"YouTube API test error: {e}")
