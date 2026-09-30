@@ -127,8 +127,13 @@ YouTube视频原简介:
                 )
                 content = response.choices[0].message.content
                 import json
-                parsed = json.loads(content)
-                
+                try:
+                    parsed = json.loads(content)
+                except Exception:
+                    parsed = {}
+                if not isinstance(parsed, dict):
+                    parsed = {}
+
                 new_title = parsed.get("title") or source_title
                 new_desc = parsed.get("description") or source_description
                 new_tags = parsed.get("tags") or ["YouTube", "搬运", "视频"]
