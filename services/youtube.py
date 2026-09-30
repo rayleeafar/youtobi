@@ -175,7 +175,10 @@ class YouTubeService:
                     info = ydl.extract_info(url, download=False)
             else:
                 raise
-            
+
+        if not isinstance(info, dict):
+            raise RuntimeError(f"Failed to extract video info from {url} (empty or invalid response)")
+
         title = info.get("title", "Untitled")
         description = info.get("description", "")
         language = info.get("language") or info.get("lang") or ""
@@ -258,6 +261,9 @@ class YouTubeService:
                     info = ydl.extract_info(url, download=True)
             else:
                 raise
+
+        if not isinstance(info, dict):
+            raise RuntimeError(f"Failed to download video from {url} (empty or invalid response)")
 
         video_id = info.get("id")
         
