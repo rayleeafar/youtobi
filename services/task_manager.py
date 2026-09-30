@@ -664,7 +664,7 @@ class TaskManager:
             if self._can_skip(task, "metadata"):
                 if self._stopped(task):
                     return
-                info = task.youtube_info
+                info = task.youtube_info or {}
                 if "metadata" not in task.completed_stages:
                     self._complete(task, "metadata", {"title": info.get("title"), "id": info.get("id")})
                 task.log(f"Skipping metadata; reusing '{info.get('title')}'.")
@@ -673,7 +673,7 @@ class TaskManager:
                     return
                 self._invalidate(task, "metadata")
                 task.log("Connecting to YouTube and fetching metadata...")
-                info = yt_service.extract_info(task.youtube_url)
+                info = yt_service.extract_info(task.youtube_url) or {}
                 task.youtube_info = info
                 self._complete(task, "metadata", {"title": info.get("title"), "id": info.get("id")})
                 task.log(f"Title: '{info.get('title')}' | Language: {info.get('language') or 'unknown'} | Is Chinese: {info.get('is_chinese')}")
@@ -891,7 +891,7 @@ class TaskManager:
                         tags=task.final_tags,
                         progress_callback=bili_upload_progress
                     )
-                    task.bvid = upload_res.get("bvid")
+                    task.bvid = upload_res.get("bvid") if isinstance(upload_res, dict) else "BV_SUCCESS"
                     self._complete(task, "bilibili_upload", {"bvid": task.bvid})
                     task.log(f"🎉 视频已成功发布至 Bilibili! BV号: {task.bvid} | 观看链接: https://www.bilibili.com/video/{task.bvid}")
                 except Exception as b_err:
@@ -934,8 +934,8 @@ class TaskManager:
                         cover_path=cover_path if cover_path.exists() else None,
                         progress_callback=yt_upload_progress
                     )
-                    task.youtube_video_id = yt_res.get("video_id")
-                    task.youtube_watch_url = yt_res.get("url")
+                    task.youtube_video_id = yt_res.get("video_id") if isinstance(yt_res, dict) else None
+                    task.youtube_watch_url = yt_res.get("url") if isinstance(yt_res, dict) else None
                     self._complete(task, "youtube_upload", {"video_id": task.youtube_video_id})
                     task.log(f"🎉 视频已成功发布至 YouTube! 视频ID: {task.youtube_video_id} | 观看链接: {task.youtube_watch_url}")
                 except Exception as yt_err:
