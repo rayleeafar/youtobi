@@ -156,7 +156,7 @@ class YouTubeService:
             "writesubtitles": True,
             "writeautomaticsub": True,
             "remote_components": ["ejs:github"],
-            "js_runtimes": {"deno": None, "node": None},
+            "js_runtimes": {"deno": {}, "node": {}},
         }
         cookie_file = self._get_cookie_file()
         if cookie_file:
@@ -234,7 +234,7 @@ class YouTubeService:
             "subtitleslangs": ["zh", "zh-CN", "zh-TW", "en", "auto"],
             "merge_output_format": "mp4",
             "remote_components": ["ejs:github"],
-            "js_runtimes": {"deno": None, "node": None},
+            "js_runtimes": {"deno": {}, "node": {}},
         }
         cookie_file = self._get_cookie_file()
         if cookie_file:

@@ -52,7 +52,7 @@
 * **解决与预防措施**：
   1. 在主机安装 Deno 二进制到标准路径 `/usr/local/bin/deno`。
   2. 虚拟环境中安装 `pip install "yt-dlp[default]>=2026.8.19" "yt-dlp-ejs>=0.8.0"`。
-  3. `services/youtube.py` 中显式配置：`"js_runtimes": {"deno": None, "node": None}`。
+  3. `services/youtube.py` 中显式配置：`"js_runtimes": {"deno": {}, "node": {}}`。
   4. 代码内已集成容灾重试：若携带 Cookie 下载遇到 `The page needs to be reloaded`，会自动回退尝试无 Cookie 纯净重试，保障公开视频正常下载。
 
 ---
