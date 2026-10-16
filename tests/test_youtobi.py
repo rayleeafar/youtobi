@@ -1415,6 +1415,144 @@ Second subtitle line
             self.assertIn("Failed to extract video info", str(ctx.exception))
 
 
+    def test_bilibili_service_list_seasons(self):
+        from unittest.mock import patch, MagicMock
+        service = BilibiliService(sessdata="fake_sess", bili_jct="fake_jct", dedeuserid="123")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "code": 0,
+            "data": {
+                "items": [
+                    {
+                        "id": 1001,
+                        "title": "测试合集",
+                        "cover": "https://cover.jpg",
+                        "ep_count": 5,
+                        "sections": [{"id": 2001, "title": "正片"}],
+                        "mtime": 1700000000
+                    }
+                ],
+                "page": {"pn": 1, "ps": 50, "total": 1}
+            }
+        }
+        with patch("requests.get", return_value=mock_resp):
+            res = service.list_seasons()
+            self.assertEqual(res["total"], 1)
+            self.assertEqual(len(res["seasons"]), 1)
+            item = res["seasons"][0]
+            self.assertEqual(item["id"], 1001)
+            self.assertEqual(item["title"], "测试合集")
+            self.assertEqual(item["section_id"], 2001)
+
+    def test_bilibili_service_create_and_add_season(self):
+        from unittest.mock import patch, MagicMock
+        service = BilibiliService(sessdata="fake_sess", bili_jct="fake_jct", dedeuserid="123")
+        
+        # Test create_season
+        mock_create = MagicMock()
+        mock_create.status_code = 200
+        mock_create.json.return_value = {
+            "code": 0,
+            "data": {"season_id": 8888, "section_id": 9999}
+        }
+        with patch("requests.post", return_value=mock_create):
+            c_res = service.create_season(title="新电视剧合集", desc="简介")
+            self.assertTrue(c_res["success"])
+            self.assertEqual(c_res["season_id"], 8888)
+            self.assertEqual(c_res["section_id"], 9999)
+
+        # Test add_to_season
+        mock_view = MagicMock()
+        mock_view.status_code = 200
+        mock_view.json.return_value = {
+            "code": 0,
+            "data": {"aid": 123456, "cid": 654321, "title": "分集第1集"}
+        }
+        mock_add = MagicMock()
+        mock_add.status_code = 200
+        mock_add.json.return_value = {"code": 0, "message": "0"}
+
+        with patch("requests.get", return_value=mock_view), \
+             patch("requests.post", return_value=mock_add):
+            a_res = service.add_to_season(season_id=8888, bvid="BV1fake", section_id=9999)
+            self.assertTrue(a_res["success"])
+            self.assertEqual(a_res["aid"], 123456)
+            self.assertEqual(a_res["cid"], 654321)
+
+    def test_bilibili_service_get_or_create_season_reuse(self):
+        from unittest.mock import patch, MagicMock
+        service = BilibiliService(sessdata="fake_sess", bili_jct="fake_jct", dedeuserid="123")
+        with patch.object(service, "list_seasons", return_value={"seasons": [{"id": 777, "title": "暴雨甄嬛", "section_id": 888}], "total": 1}):
+            res = service.get_or_create_season("暴雨甄嬛")
+            self.assertTrue(res["success"])
+            self.assertTrue(res["reused"])
+            self.assertEqual(res["season_id"], 777)
+
+    def test_api_bilibili_seasons_routes(self):
+        from unittest.mock import patch
+        with patch("services.bilibili.BilibiliService.list_seasons", return_value={"seasons": [{"id": 123, "title": "合集A"}], "total": 1}):
+            res = self.client.get("/api/bilibili/seasons")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["success"])
+            self.assertEqual(len(data["seasons"]), 1)
+
+        with patch("services.bilibili.BilibiliService.create_season", return_value={"success": True, "season_id": 456, "section_id": 789}):
+            res2 = self.client.post("/api/bilibili/seasons", json={"title": "新测试合集"})
+            self.assertEqual(res2.status_code, 200)
+            self.assertTrue(res2.json()["success"])
+
+    def test_api_tasks_create_with_season_fields(self):
+        from unittest.mock import patch
+        with patch("services.task_manager.TaskManager._run_task_pipeline"):
+            res = self.client.post("/api/tasks", json={
+                "youtube_url": "https://www.youtube.com/watch?v=season123",
+                "bilibili_season_mode": "existing",
+                "bilibili_season_id": 9999,
+                "bilibili_season_name": "指定合集"
+            })
+            self.assertEqual(res.status_code, 200)
+            task_dict = res.json()["task"]
+            self.assertEqual(task_dict["bilibili_season_mode"], "existing")
+            self.assertEqual(task_dict["bilibili_season_id"], 9999)
+            self.assertEqual(task_dict["bilibili_season_name"], "指定合集")
+
+    def test_task_pipeline_season_resilience(self):
+        """Verifies that season failure does NOT cause the video task to fail."""
+        from services.task_manager import Task, TaskManager
+        from unittest.mock import patch, MagicMock
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_tasks_file = Path(tmpdir) / "tasks.json"
+            mgr = TaskManager(file_path=tmp_tasks_file)
+
+            fake_vid = Path(tmpdir) / "vid.mp4"
+            fake_vid.write_bytes(b"data")
+
+            task = Task(
+                task_id="t_season",
+                youtube_url="https://youtube.com/watch?v=test_season",
+                bilibili_season_mode="create",
+                bilibili_season_name="测试合集名称"
+            )
+
+            # Mock BilibiliService upload success, but season addition raises exception
+            with patch("services.youtube.YouTubeService.extract_info", return_value={"title": "EP01 My Video", "description": "", "language": "zh", "is_chinese": True}), \
+                 patch("services.youtube.YouTubeService.download_video_and_subtitles", return_value=(fake_vid, None, {})), \
+                 patch("services.bilibili.BilibiliService.upload_video", return_value={"bvid": "BV1SEASON_TEST"}), \
+                 patch("services.bilibili.BilibiliService.get_or_create_season", side_effect=RuntimeError("Season API rate limited")):
+
+                mgr._run_task_pipeline(task)
+
+                # Task should still be COMPLETED because video uploaded successfully
+                self.assertEqual(task.status, "COMPLETED")
+                self.assertEqual(task.bvid, "BV1SEASON_TEST")
+                self.assertTrue(any("自动加入合集失败" in log or "异常" in log for log in task.logs))
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
