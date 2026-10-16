@@ -1588,7 +1588,58 @@ Second subtitle line
                 self.assertTrue(any("自动加入合集失败" in log or "异常" in log for log in task.logs))
 
 
+    def test_task_pagination_and_api(self):
+        from services.task_manager import Task, TaskManager
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_tasks_file = Path(tmpdir) / "tasks_pagination.json"
+            mgr = TaskManager(file_path=tmp_tasks_file)
+
+            # Create 5 dummy tasks
+            for i in range(5):
+                t = Task(
+                    task_id=f"t_{i}",
+                    youtube_url=f"https://youtube.com/watch?v=page_{i}"
+                )
+                t.status = "COMPLETED" if i % 2 == 0 else "FAILED"
+                mgr.tasks[t.id] = t
+            mgr.save_tasks()
+
+            self.assertEqual(mgr.count_tasks(), 5)
+            self.assertEqual(mgr.count_tasks(status="COMPLETED"), 3)
+            self.assertEqual(mgr.count_tasks(status="FAILED"), 2)
+
+            # Test pagination
+            all_tasks = mgr.list_tasks()
+            self.assertEqual(len(all_tasks), 5)
+
+            p1 = mgr.list_tasks(offset=0, limit=2)
+            self.assertEqual(len(p1), 2)
+            self.assertEqual(p1[0]["id"], all_tasks[0]["id"])
+            self.assertEqual(p1[1]["id"], all_tasks[1]["id"])
+
+            p2 = mgr.list_tasks(offset=2, limit=2)
+            self.assertEqual(len(p2), 2)
+            self.assertEqual(p2[0]["id"], all_tasks[2]["id"])
+
+            p3 = mgr.list_tasks(offset=4, limit=2)
+            self.assertEqual(len(p3), 1)
+            self.assertEqual(p3[0]["id"], all_tasks[4]["id"])
+
+        # Test API endpoint pagination
+        res = self.client.get("/api/tasks?offset=0&limit=2")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["success"])
+        self.assertIn("total", data)
+        self.assertIn("has_more", data)
+        self.assertEqual(data["offset"], 0)
+        self.assertEqual(data["limit"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
