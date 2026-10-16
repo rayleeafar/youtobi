@@ -218,6 +218,9 @@ class TaskCreateRequest(BaseModel):
     skip_subtitles: Optional[bool] = False
     upload_targets: Optional[List[str]] = None
     secondary_creation: Optional[SecondaryCreationParams] = None
+    bilibili_season_mode: Optional[str] = "create"
+    bilibili_season_id: Optional[int] = None
+    bilibili_season_name: Optional[str] = None
 
 class SkipSubtitlesRequest(BaseModel):
     skip: Optional[bool] = True
@@ -317,7 +320,10 @@ async def create_task(req: TaskCreateRequest):
         items,
         skip_subtitles=req.skip_subtitles or False,
         upload_targets=req.upload_targets,
-        secondary_creation=sec_dict
+        secondary_creation=sec_dict,
+        bilibili_season_mode=req.bilibili_season_mode or "create",
+        bilibili_season_id=req.bilibili_season_id,
+        bilibili_season_name=req.bilibili_season_name
     )
     return {
         "success": True,
@@ -583,16 +589,73 @@ async def test_llm_model(req: LLMTestRequest):
         logger.error(f"Error testing LLM model: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _get_bili_service() -> BilibiliService:
+    cfg = config_manager.all()
+    sessdata = cfg.get("bilibili_sessdata", "")
+    bili_jct = cfg.get("bilibili_bili_jct", "")
+    dedeuserid = cfg.get("bilibili_dedeuserid", "")
+    extra_cookies = {}
+    
+    if cfg.get("cookiecloud_url") and cfg.get("cookiecloud_uuid") and cfg.get("cookiecloud_password"):
+        try:
+            cc = CookieCloudService(
+                url=cfg["cookiecloud_url"],
+                uuid=cfg["cookiecloud_uuid"],
+                password=cfg["cookiecloud_password"]
+            )
+            synced_bili, _ = cc.fetch_all_synced_cookies()
+            if synced_bili:
+                extra_cookies = synced_bili
+                sessdata = synced_bili.get("SESSDATA", sessdata)
+                bili_jct = synced_bili.get("bili_jct", bili_jct)
+                dedeuserid = synced_bili.get("DedeUserID", dedeuserid)
+        except Exception as e:
+            logger.debug(f"CookieCloud cookie fetch skipped in _get_bili_service: {e}")
+            
+    return BilibiliService(
+        sessdata=sessdata,
+        bili_jct=bili_jct,
+        dedeuserid=dedeuserid,
+        extra_cookies=extra_cookies
+    )
+
 @app.post("/api/bilibili/check")
 async def check_bilibili():
-    cfg = config_manager.all()
-    bili_service = BilibiliService(
-        sessdata=cfg.get("bilibili_sessdata", ""),
-        bili_jct=cfg.get("bilibili_bili_jct", ""),
-        dedeuserid=cfg.get("bilibili_dedeuserid", "")
-    )
+    bili_service = _get_bili_service()
     result = bili_service.validate_credentials()
     return {"success": True, "result": result}
+
+@app.get("/api/bilibili/seasons")
+async def get_bilibili_seasons(refresh: bool = False):
+    bili_service = _get_bili_service()
+    try:
+        res = bili_service.list_seasons(pn=1, ps=50)
+        return {
+            "success": True,
+            "seasons": res.get("seasons", []),
+            "total": res.get("total", 0)
+        }
+    except Exception as e:
+        logger.error(f"Error fetching bilibili seasons: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class SeasonCreateRequest(BaseModel):
+    title: str
+    description: Optional[str] = ""
+    cover: Optional[str] = ""
+
+@app.post("/api/bilibili/seasons")
+async def create_bilibili_season(req: SeasonCreateRequest):
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="合集标题不能为空")
+    bili_service = _get_bili_service()
+    try:
+        result = bili_service.create_season(title=title, desc=req.description or "", cover=req.cover or "")
+        return {"success": True, "season": result}
+    except Exception as e:
+        logger.error(f"Error creating bilibili season: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class YouTubeAuthUrlRequest(BaseModel):
