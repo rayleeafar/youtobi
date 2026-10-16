@@ -7,6 +7,7 @@ const HOST_STATS_INTERVAL_MS = 15000;
 document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   loadTasks();
+  loadBilibiliSeasons();
   activePollInterval = setInterval(loadTasks, 3000);
   refreshHostStats();
   // Second sample shortly after load so bandwidth has a delta before the 15s cadence.
@@ -372,6 +373,12 @@ async function handleFormSubmit(event) {
     watermark_text: secWmText
   };
 
+  const seasonModeEl = document.querySelector('input[name="bilibili_season_mode"]:checked');
+  const seasonMode = seasonModeEl ? seasonModeEl.value : 'create';
+  const seasonName = document.getElementById('bilibili_season_name') ? document.getElementById('bilibili_season_name').value.trim() : '';
+  const seasonIdVal = document.getElementById('bilibili_season_id') ? document.getElementById('bilibili_season_id').value : '';
+  const seasonId = seasonIdVal ? parseInt(seasonIdVal, 10) : null;
+
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.innerText = '提交中...';
@@ -384,7 +391,10 @@ async function handleFormSubmit(event) {
         youtube_url: url,
         skip_subtitles: skipSubtitles,
         upload_targets: targets,
-        secondary_creation: secondaryCreation
+        secondary_creation: secondaryCreation,
+        bilibili_season_mode: seasonMode,
+        bilibili_season_id: seasonId,
+        bilibili_season_name: seasonName
       })
     });
     const data = await res.json();
@@ -1079,5 +1089,162 @@ function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
+
+// ==========================================
+// Bilibili Seasons Management
+// ==========================================
+
+function toggleBilibiliSeasonVisibility() {
+  const biliTarget = document.getElementById('target_bilibili');
+  const seasonCard = document.getElementById('bilibiliSeasonCard');
+  if (seasonCard) {
+    seasonCard.style.display = (biliTarget && biliTarget.checked) ? 'block' : 'none';
+  }
+}
+
+function handleSeasonModeChange() {
+  const modeEl = document.querySelector('input[name="bilibili_season_mode"]:checked');
+  const mode = modeEl ? modeEl.value : 'create';
+  const createGroup = document.getElementById('seasonCreateInputGroup');
+  const existingGroup = document.getElementById('seasonExistingSelectGroup');
+
+  if (mode === 'create') {
+    if (createGroup) createGroup.style.display = 'flex';
+    if (existingGroup) existingGroup.style.display = 'none';
+  } else if (mode === 'existing') {
+    if (createGroup) createGroup.style.display = 'none';
+    if (existingGroup) {
+      existingGroup.style.display = 'flex';
+      if (!window.__seasonsLoaded) {
+        loadBilibiliSeasons();
+      }
+    }
+  } else {
+    // 'none'
+    if (createGroup) createGroup.style.display = 'none';
+    if (existingGroup) existingGroup.style.display = 'none';
+  }
+}
+
+async function loadBilibiliSeasons(forceRefresh = false) {
+  const selectEl = document.getElementById('bilibili_season_id');
+  const modalListEl = document.getElementById('seasonsModalList');
+  if (modalListEl && forceRefresh) {
+    modalListEl.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 2rem;">正在向 B站 实时拉取最新合集...</div>';
+  }
+
+  try {
+    const url = forceRefresh ? '/api/bilibili/seasons?refresh=true' : '/api/bilibili/seasons';
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const err = data.detail || '获取合集失败';
+      if (modalListEl) modalListEl.innerHTML = `<div style="text-align: center; color: #ff5252; padding: 2rem;">⚠️ ${escapeHtml(err)}</div>`;
+      return;
+    }
+
+    const seasons = data.seasons || [];
+    window.__cachedSeasons = seasons;
+    window.__seasonsLoaded = true;
+
+    // Populate dropdown
+    if (selectEl) {
+      const currentVal = selectEl.value;
+      selectEl.innerHTML = '<option value="">-- 选择已有合集 --</option>';
+      seasons.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.title} (${s.ep_count || 0}集)`;
+        if (String(s.id) === String(currentVal)) {
+          opt.selected = true;
+        }
+        selectEl.appendChild(opt);
+      });
+    }
+
+    // Populate Modal List
+    if (modalListEl) {
+      if (seasons.length === 0) {
+        modalListEl.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 2rem;">暂无合集，可点击上方「新建合集」快速创建。</div>';
+      } else {
+        modalListEl.innerHTML = seasons.map(s => {
+          const coverImg = s.cover ? `<img src="${escapeHtml(s.cover)}" style="width: 80px; height: 50px; object-fit: cover; border-radius: 6px;" alt="cover">` : `<div style="width: 80px; height: 50px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;">📺</div>`;
+          const mtimeStr = s.mtime ? new Date(s.mtime * 1000).toLocaleString() : '';
+          return `
+            <div style="display: flex; gap: 12px; align-items: center; background: rgba(10, 14, 23, 0.5); border: 1px solid var(--panel-border); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem;">
+              ${coverImg}
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-weight: 600; font-size: 0.95rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(s.title)}</div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 2px;">
+                  <span>集数: ${s.ep_count || 0} 集</span>
+                  ${mtimeStr ? `<span style="margin-left: 10px;">更新时间: ${mtimeStr}</span>` : ''}
+                  <span style="margin-left: 10px; font-family: monospace;">ID: ${s.id}</span>
+                </div>
+              </div>
+              <button class="btn btn-secondary" style="padding: 0.3rem 0.7rem; font-size: 0.75rem;" onclick="selectSeasonForTask(${s.id}, '${escapeHtml(s.title)}')">选择此合集</button>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  } catch (err) {
+    console.error('Error loading bilibili seasons:', err);
+    if (modalListEl) modalListEl.innerHTML = `<div style="text-align: center; color: #ff5252; padding: 2rem;">⚠️ 网络错误: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function selectSeasonForTask(seasonId, seasonTitle) {
+  const radioExisting = document.querySelector('input[name="bilibili_season_mode"][value="existing"]');
+  if (radioExisting) {
+    radioExisting.checked = true;
+    handleSeasonModeChange();
+  }
+  const selectEl = document.getElementById('bilibili_season_id');
+  if (selectEl) {
+    selectEl.value = seasonId;
+  }
+  closeSeasonsModal();
+}
+
+function openSeasonsModal() {
+  const modal = document.getElementById('seasonsModal');
+  if (modal) {
+    modal.classList.add('active');
+    loadBilibiliSeasons(false);
+  }
+}
+
+function closeSeasonsModal() {
+  const modal = document.getElementById('seasonsModal');
+  if (modal) modal.classList.remove('active');
+}
+
+async function handleCreateSeasonFromModal() {
+  const titleInput = document.getElementById('newSeasonTitle');
+  const title = titleInput ? titleInput.value.trim() : '';
+  if (!title) {
+    alert('请输入新合集标题');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/bilibili/seasons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title, description: '' })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      alert(`合集《${title}》创建成功！`);
+      if (titleInput) titleInput.value = '';
+      await loadBilibiliSeasons(true);
+    } else {
+      alert(`创建合集失败: ${data.detail || '未知错误'}`);
+    }
+  } catch (e) {
+    alert(`创建合集出错: ${e.message}`);
+  }
+}
+
 
 
