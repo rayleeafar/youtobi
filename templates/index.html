@@ -21,6 +21,9 @@
         </div>
       </div>
       <div class="header-actions">
+        <button class="btn btn-secondary" onclick="openSeasonsModal()">
+          <span>📑 合集管理</span>
+        </button>
         <button class="btn btn-secondary" onclick="openSettingsModal()">
           <span>⚙️ 设置与配置</span>
         </button>
@@ -83,13 +86,45 @@
             <label style="display: block; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.5rem;">🎯 发布目标平台 (Target Platforms):</label>
             <div class="target-selector" style="display: flex; gap: 12px; flex-wrap: wrap;">
               <label class="target-option">
-                <input type="checkbox" id="target_bilibili" checked>
+                <input type="checkbox" id="target_bilibili" checked onchange="toggleBilibiliSeasonVisibility()">
                 <span class="target-chip">📺 哔哩哔哩 (Bilibili)</span>
               </label>
               <label class="target-option">
                 <input type="checkbox" id="target_youtube">
                 <span class="target-chip">🔴 YouTube 频道</span>
               </label>
+            </div>
+          </div>
+
+          <!-- Bilibili Season Management Selection -->
+          <div id="bilibiliSeasonCard" style="background: rgba(10, 14, 23, 0.6); border: 1px solid var(--panel-border); border-radius: var(--radius-md); padding: 0.8rem 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <label style="font-size: 0.85rem; font-weight: 600; color: var(--accent-cyan);">📚 B站合集设置 (Bilibili Season):</label>
+              <button type="button" class="btn btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="loadBilibiliSeasons(true)">🔄 刷新合集</button>
+            </div>
+            <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 0.6rem; font-size: 0.85rem;">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="radio" name="bilibili_season_mode" value="create" checked onchange="handleSeasonModeChange()">
+                <span>✨ 智能新建/复用合集</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="radio" name="bilibili_season_mode" value="existing" onchange="handleSeasonModeChange()">
+                <span>📂 加入已有合集</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="radio" name="bilibili_season_mode" value="none" onchange="handleSeasonModeChange()">
+                <span>🚫 不加入合集</span>
+              </label>
+            </div>
+            
+            <div id="seasonCreateInputGroup" style="display: flex; flex-direction: column; gap: 0.3rem;">
+              <input type="text" id="bilibili_season_name" class="input-field" placeholder="自定义合集标题 (选填，留空将根据视频标题智能清洗系列名称或播放列表名称)" style="font-size: 0.85rem; padding: 0.5rem 0.8rem;">
+            </div>
+
+            <div id="seasonExistingSelectGroup" style="display: none; flex-direction: column; gap: 0.3rem;">
+              <select id="bilibili_season_id" class="input-field" style="font-size: 0.85rem; padding: 0.5rem 0.8rem;">
+                <option value="">-- 选择已有合集 --</option>
+              </select>
             </div>
           </div>
 
@@ -406,6 +441,30 @@
           <button type="submit" class="btn btn-primary">保存配置</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Bilibili Seasons Management Modal -->
+  <div class="modal-overlay" id="seasonsModal">
+    <div class="modal-content" style="max-width: 800px; max-height: 85vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <h3 style="display: flex; align-items: center; gap: 0.5rem; color: var(--accent-cyan); font-size: 1.1rem; font-weight: 700;">
+          <span>📑 Bilibili 视频合集管理</span>
+        </h3>
+        <button class="btn btn-secondary" style="padding: 0.3rem 0.6rem;" onclick="closeSeasonsModal()">✕</button>
+      </div>
+      
+      <div style="padding: 1rem 0; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--panel-border); gap: 1rem; flex-wrap: wrap;">
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex: 1; min-width: 260px;">
+          <input type="text" id="newSeasonTitle" class="input-field" placeholder="新合集标题 (如: 某某剧集第一季)" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;">
+          <button class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem; white-space: nowrap;" onclick="handleCreateSeasonFromModal()">➕ 新建合集</button>
+        </div>
+        <button class="btn btn-secondary" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" onclick="loadBilibiliSeasons(true)">🔄 强制刷新</button>
+      </div>
+
+      <div id="seasonsModalList" style="flex: 1; overflow-y: auto; padding: 1rem 0; display: flex; flex-direction: column; gap: 0.8rem;">
+        <div style="text-align: center; color: var(--text-muted); padding: 2rem;">加载合集中...</div>
+      </div>
     </div>
   </div>
 
