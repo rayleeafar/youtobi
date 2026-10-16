@@ -615,21 +615,35 @@ class BilibiliService:
                         for it in raw_items:
                             if not isinstance(it, dict):
                                 continue
-                            sec_id = None
-                            sections = it.get("sections") or []
-                            if sections and isinstance(sections, list) and isinstance(sections[0], dict):
-                                sec_id = sections[0].get("id") or sections[0].get("section_id")
-                            elif it.get("section_id"):
-                                sec_id = it.get("section_id")
                             
+                            # Support nested structure (it['season']) or flat structure (it)
+                            s_obj = it.get("season") if isinstance(it.get("season"), dict) else it
+                            sec_obj = it.get("sections")
+                            sec_list = []
+                            if isinstance(sec_obj, dict):
+                                sec_list = sec_obj.get("sections") or []
+                            elif isinstance(sec_obj, list):
+                                sec_list = sec_obj
+
+                            sec_id = None
+                            ep_count = s_obj.get("ep_count") or s_obj.get("ep_num") or 0
+                            if sec_list and isinstance(sec_list, list) and isinstance(sec_list[0], dict):
+                                sec_id = sec_list[0].get("id") or sec_list[0].get("section_id")
+                                ep_count = sec_list[0].get("epCount", ep_count)
+                            elif it.get("section_id") or s_obj.get("section_id"):
+                                sec_id = it.get("section_id") or s_obj.get("section_id")
+                            
+                            if not ep_count and isinstance(it.get("part_episodes"), list):
+                                ep_count = len(it["part_episodes"])
+
                             items.append({
-                                "id": it.get("id") or it.get("season_id"),
-                                "title": it.get("title", ""),
-                                "cover": it.get("cover", ""),
-                                "desc": it.get("desc", ""),
-                                "ep_count": it.get("ep_count", it.get("total", 0)),
+                                "id": s_obj.get("id") or s_obj.get("season_id"),
+                                "title": s_obj.get("title", ""),
+                                "cover": s_obj.get("cover", ""),
+                                "desc": s_obj.get("desc", ""),
+                                "ep_count": ep_count,
                                 "section_id": sec_id,
-                                "mtime": it.get("mtime", it.get("ctime", 0)),
+                                "mtime": s_obj.get("mtime", s_obj.get("ctime", 0)),
                             })
                         return {"seasons": items, "total": total}
         except Exception as e:

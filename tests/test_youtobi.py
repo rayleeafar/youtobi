@@ -1445,6 +1445,42 @@ Second subtitle line
             self.assertEqual(item["title"], "测试合集")
             self.assertEqual(item["section_id"], 2001)
 
+        # Test Bilibili actual creative web nested schema: data.seasons[0].season
+        mock_nested = MagicMock()
+        mock_nested.status_code = 200
+        mock_nested.json.return_value = {
+            "code": 0,
+            "data": {
+                "seasons": [
+                    {
+                        "season": {
+                            "id": 9036206,
+                            "title": "暴雨甄嬛",
+                            "cover": "https://cover.jpg",
+                            "mtime": 1788765653
+                        },
+                        "sections": {
+                            "sections": [
+                                {
+                                    "id": 10086287,
+                                    "epCount": 2
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "page": {"total": 1}
+            }
+        }
+        with patch("requests.get", return_value=mock_nested):
+            res_nested = service.list_seasons()
+            self.assertEqual(len(res_nested["seasons"]), 1)
+            s_item = res_nested["seasons"][0]
+            self.assertEqual(s_item["id"], 9036206)
+            self.assertEqual(s_item["title"], "暴雨甄嬛")
+            self.assertEqual(s_item["section_id"], 10086287)
+            self.assertEqual(s_item["ep_count"], 2)
+
     def test_bilibili_service_create_and_add_season(self):
         from unittest.mock import patch, MagicMock
         service = BilibiliService(sessdata="fake_sess", bili_jct="fake_jct", dedeuserid="123")
