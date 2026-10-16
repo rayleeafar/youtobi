@@ -4,9 +4,19 @@ let hostStatsKickoff = null;
 let hostStatsPrev = null;
 const HOST_STATS_INTERVAL_MS = 15000;
 
+// Pagination & Infinite Scroll State
+const TASKS_PAGE_SIZE = 12;
+let loadedTasksCount = 0;
+let totalTasksCount = 0;
+let hasMoreTasks = true;
+let isLoadingTasks = false;
+let isLoadingMore = false;
+let taskObserver = null;
+
 document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   loadTasks();
+  initTaskInfiniteScroll();
   loadBilibiliSeasons();
   activePollInterval = setInterval(loadTasks, 3000);
   refreshHostStats();
@@ -19,6 +29,7 @@ window.addEventListener('pagehide', () => {
   if (activePollInterval) clearInterval(activePollInterval);
   if (hostStatsTimer) clearInterval(hostStatsTimer);
   if (hostStatsKickoff) clearTimeout(hostStatsKickoff);
+  if (taskObserver) taskObserver.disconnect();
 });
 
 function formatBytes(n) {
@@ -400,7 +411,7 @@ async function handleFormSubmit(event) {
     const data = await res.json();
     if (data.success) {
       urlInput.value = '';
-      loadTasks();
+      loadTasks(true);
     } else {
       alert('提交失败: ' + (data.detail || '未知错误'));
     }
@@ -547,11 +558,41 @@ async function deleteTask(taskId) {
   }
 }
 
-async function loadTasks() {
+function updateTaskScrollStatus() {
+  const statusEl = document.getElementById('taskScrollStatus');
+  const textEl = document.getElementById('taskScrollText');
+  if (!statusEl || !textEl) return;
+
+  if (totalTasksCount === 0) {
+    statusEl.style.display = 'none';
+    return;
+  }
+
+  statusEl.style.display = 'block';
+  if (isLoadingMore) {
+    textEl.innerHTML = '<span class="spinner"></span> 正在加载更多历史记录...';
+  } else if (hasMoreTasks) {
+    textEl.textContent = `向下滚动加载更多 (已展示 ${loadedTasksCount} / 共 ${totalTasksCount} 条)`;
+  } else {
+    textEl.textContent = `已加载全部 ${totalTasksCount} 条记录`;
+  }
+}
+
+async function loadTasks(reset = false) {
+  if (reset) {
+    loadedTasksCount = 0;
+  }
+  const limit = Math.max(TASKS_PAGE_SIZE, loadedTasksCount || TASKS_PAGE_SIZE);
+
   try {
-    const res = await fetch('/api/tasks');
+    isLoadingTasks = true;
+    const res = await fetch(`/api/tasks?offset=0&limit=${limit}`);
     const data = await res.json();
     if (!data.success) return;
+
+    totalTasksCount = typeof data.total === 'number' ? data.total : (data.tasks || []).length;
+    loadedTasksCount = (data.tasks || []).length;
+    hasMoreTasks = data.has_more !== undefined ? data.has_more : (loadedTasksCount < totalTasksCount);
 
     const container = document.getElementById('taskList');
     if (!container) return;
@@ -573,6 +614,7 @@ async function loadTasks() {
 
     // 2. If nothing changed, do not touch DOM
     if (container._lastTasksJson === currentTasksJson) {
+      updateTaskScrollStatus();
       return;
     }
 
@@ -585,6 +627,7 @@ async function loadTasks() {
           </div>`;
       }
       container._lastTasksJson = currentTasksJson;
+      updateTaskScrollStatus();
       return;
     }
     const emptyPlaceholder = container.querySelector('#emptyTaskListPlaceholder');
@@ -662,8 +705,75 @@ async function loadTasks() {
     });
 
     container._lastTasksJson = currentTasksJson;
+    updateTaskScrollStatus();
   } catch (err) {
     console.error('Error loading tasks:', err);
+  } finally {
+    isLoadingTasks = false;
+  }
+}
+
+async function loadMoreTasks() {
+  if (isLoadingMore || isLoadingTasks || !hasMoreTasks || loadedTasksCount === 0) return;
+  isLoadingMore = true;
+  updateTaskScrollStatus();
+
+  try {
+    const res = await fetch(`/api/tasks?offset=${loadedTasksCount}&limit=${TASKS_PAGE_SIZE}`);
+    const data = await res.json();
+    if (!data.success) return;
+
+    const newTasks = data.tasks || [];
+    totalTasksCount = typeof data.total === 'number' ? data.total : totalTasksCount;
+
+    const container = document.getElementById('taskList');
+    if (container && newTasks.length > 0) {
+      newTasks.forEach(task => {
+        if (document.getElementById(`task-card-${task.id}`)) return; // already in DOM
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = renderTaskCard(task);
+        const card = tempDiv.firstElementChild;
+        card._taskJson = JSON.stringify(task);
+        const terminal = card.querySelector('.log-terminal[data-task-id]');
+        if (terminal) {
+          terminal.scrollTop = terminal.scrollHeight;
+        }
+        container.appendChild(card);
+        loadedTasksCount++;
+      });
+      container._lastTasksJson = null; // force diff on next poll to incorporate newly loaded cards
+    }
+
+    hasMoreTasks = data.has_more !== undefined ? data.has_more : (loadedTasksCount < totalTasksCount);
+  } catch (err) {
+    console.error('Error loading more tasks:', err);
+  } finally {
+    isLoadingMore = false;
+    updateTaskScrollStatus();
+  }
+}
+
+function initTaskInfiniteScroll() {
+  const sentinel = document.getElementById('taskScrollStatus');
+  if (!sentinel) return;
+
+  if (window.IntersectionObserver) {
+    taskObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          loadMoreTasks();
+        }
+      });
+    }, {
+      rootMargin: '200px'
+    });
+    taskObserver.observe(sentinel);
+  } else {
+    window.addEventListener('scroll', () => {
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 400) {
+        loadMoreTasks();
+      }
+    });
   }
 }
 
