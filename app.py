@@ -333,8 +333,22 @@ async def create_task(req: TaskCreateRequest):
     }
 
 @app.get("/api/tasks")
-async def list_tasks():
-    return {"success": True, "tasks": task_manager.list_tasks()}
+async def list_tasks(
+    offset: int = 0,
+    limit: Optional[int] = None,
+    status: Optional[str] = None
+):
+    tasks = task_manager.list_tasks(offset=offset, limit=limit, status=status)
+    total = task_manager.count_tasks(status=status)
+    has_more = (offset + len(tasks)) < total
+    return {
+        "success": True,
+        "tasks": tasks,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more
+    }
 
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 
