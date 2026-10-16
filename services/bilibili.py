@@ -591,3 +591,226 @@ class BilibiliService:
             logger.error(f"Bilibili upload error: {e}")
             raise RuntimeError(f"Upload failed: {e}")
 
+    def list_seasons(self, pn: int = 1, ps: int = 50) -> Dict[str, Any]:
+        """
+        Fetches list of video seasons (合集) for the authenticated Bilibili user.
+        Primary: member creative center API.
+        Fallback: bilibili_api user channel list if applicable.
+        """
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://member.bilibili.com/platform/upload-manager/season",
+        }
+        url = f"https://member.bilibili.com/x2/creative/web/seasons?pn={pn}&ps={ps}&order=mtime&sort=desc&draft=1"
+        try:
+            res = requests.get(url, cookies=self.get_cookies(), headers=headers, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, dict) and data.get("code") == 0:
+                    d_body = data.get("data") or {}
+                    items = []
+                    if isinstance(d_body, dict):
+                        raw_items = d_body.get("items") or d_body.get("seasons") or []
+                        total = (d_body.get("page") or {}).get("total", len(raw_items))
+                        for it in raw_items:
+                            if not isinstance(it, dict):
+                                continue
+                            sec_id = None
+                            sections = it.get("sections") or []
+                            if sections and isinstance(sections, list) and isinstance(sections[0], dict):
+                                sec_id = sections[0].get("id") or sections[0].get("section_id")
+                            elif it.get("section_id"):
+                                sec_id = it.get("section_id")
+                            
+                            items.append({
+                                "id": it.get("id") or it.get("season_id"),
+                                "title": it.get("title", ""),
+                                "cover": it.get("cover", ""),
+                                "desc": it.get("desc", ""),
+                                "ep_count": it.get("ep_count", it.get("total", 0)),
+                                "section_id": sec_id,
+                                "mtime": it.get("mtime", it.get("ctime", 0)),
+                            })
+                        return {"seasons": items, "total": total}
+        except Exception as e:
+            logger.warning(f"Error fetching seasons from creative center: {e}")
+
+        # Fallback to bilibili_api if dedeuserid is present
+        if self.dedeuserid:
+            try:
+                from bilibili_api import user, Credential
+                cred = Credential(sessdata=self.sessdata, bili_jct=self.bili_jct, dedeuserid=self.dedeuserid)
+                u = user.User(int(self.dedeuserid), credential=cred)
+                ch_list = asyncio.run(u.get_channel_series_and_spec_list())
+                series_list = []
+                if isinstance(ch_list, dict):
+                    raw_series = (ch_list.get("series_list") or {}).get("series_list") or []
+                    for s in raw_series:
+                        meta = s.get("meta") or {}
+                        series_list.append({
+                            "id": meta.get("series_id"),
+                            "title": meta.get("name", ""),
+                            "cover": meta.get("cover", ""),
+                            "desc": meta.get("description", ""),
+                            "ep_count": meta.get("total", 0),
+                            "section_id": None,
+                            "mtime": meta.get("mtime", 0),
+                        })
+                return {"seasons": series_list, "total": len(series_list)}
+            except Exception as e2:
+                logger.warning(f"Fallback bilibili_api seasons lookup failed: {e2}")
+
+        return {"seasons": [], "total": 0}
+
+    def create_season(self, title: str, desc: str = "", cover: str = "") -> Dict[str, Any]:
+        """
+        Creates a new season/series (合集) in Bilibili member creative center.
+        """
+        title = title.strip()[:40]
+        if not title:
+            raise ValueError("Season title cannot be empty")
+        
+        url = f"https://member.bilibili.com/x2/creative/web/season/add?csrf={self.bili_jct}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://member.bilibili.com/platform/upload-manager/season",
+        }
+        payload = {
+            "title": title,
+            "desc": desc[:200] if desc else "",
+            "cover": cover or "",
+            "csrf": self.bili_jct,
+        }
+        res = requests.post(url, data=payload, cookies=self.get_cookies(), headers=headers, timeout=15)
+        if res.status_code != 200:
+            raise RuntimeError(f"Bilibili create season HTTP {res.status_code}: {res.text[:200]}")
+        data = res.json()
+        if not isinstance(data, dict) or data.get("code") != 0:
+            msg = data.get("message", "Failed to create season") if isinstance(data, dict) else "Unknown error"
+            code = data.get("code", -1) if isinstance(data, dict) else -1
+            raise RuntimeError(f"Bilibili create season error ({code}): {msg}")
+        
+        res_data = data.get("data") or {}
+        season_id = res_data.get("season_id") or res_data.get("id")
+        section_id = res_data.get("section_id")
+        return {
+            "success": True,
+            "season_id": season_id,
+            "section_id": section_id,
+            "title": title,
+        }
+
+    def get_season_section(self, season_id: int) -> Optional[int]:
+        """
+        Finds the default section_id for a given season_id.
+        """
+        res = self.list_seasons(pn=1, ps=50)
+        for s in res.get("seasons", []):
+            if s.get("id") == season_id and s.get("section_id"):
+                return s["section_id"]
+        
+        url = f"https://member.bilibili.com/x2/creative/web/season/section/list?season_id={season_id}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://member.bilibili.com/platform/upload-manager/season",
+        }
+        try:
+            r = requests.get(url, cookies=self.get_cookies(), headers=headers, timeout=10)
+            if r.status_code == 200:
+                d = r.json()
+                if isinstance(d, dict) and d.get("code") == 0:
+                    sections = d.get("data") or []
+                    if isinstance(sections, list) and sections:
+                        return sections[0].get("id") or sections[0].get("section_id")
+        except Exception as e:
+            logger.warning(f"Error getting season section list: {e}")
+        return None
+
+    def add_to_season(self, season_id: int, bvid: str, section_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Adds a published video (bvid) into a season (合集).
+        """
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://member.bilibili.com/platform/upload-manager/season",
+        }
+
+        # Step 1: Query aid, cid, and title of the video
+        view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+        r_view = requests.get(view_url, cookies=self.get_cookies(), headers=headers, timeout=12)
+        if r_view.status_code != 200:
+            raise RuntimeError(f"Failed to fetch video details for {bvid}: HTTP {r_view.status_code}")
+        view_data = r_view.json()
+        if not isinstance(view_data, dict) or view_data.get("code") != 0:
+            msg = view_data.get("message", "Failed to get video info") if isinstance(view_data, dict) else "Unknown"
+            raise RuntimeError(f"Failed to fetch video details for {bvid}: {msg}")
+        
+        v_info = view_data.get("data") or {}
+        aid = v_info.get("aid")
+        cid = v_info.get("cid")
+        ep_title = v_info.get("title", "")
+        if not aid or not cid:
+            raise RuntimeError(f"Missing aid/cid in video info for {bvid}: aid={aid}, cid={cid}")
+
+        # Step 2: Determine section_id if not provided
+        if not section_id:
+            section_id = self.get_season_section(season_id)
+            if not section_id:
+                logger.warning(f"Could not determine section_id for season {season_id}, using season_id as section_id")
+                section_id = season_id
+
+        # Step 3: Append video episode to season section
+        add_url = f"https://member.bilibili.com/x2/creative/web/season/section/episodes/add?csrf={self.bili_jct}"
+        payload = {
+            "sectionId": section_id,
+            "episodes": [
+                {
+                    "aid": aid,
+                    "cid": cid,
+                    "title": ep_title[:80],
+                    "charging_pay": 0
+                }
+            ],
+            "csrf": self.bili_jct
+        }
+        res = requests.post(add_url, json=payload, cookies=self.get_cookies(), headers=headers, timeout=15)
+        if res.status_code != 200:
+            raise RuntimeError(f"Bilibili add to season HTTP {res.status_code}: {res.text[:200]}")
+        data = res.json()
+        if not isinstance(data, dict) or data.get("code") != 0:
+            msg = data.get("message", "Failed to add episode to season") if isinstance(data, dict) else "Unknown error"
+            code = data.get("code", -1) if isinstance(data, dict) else -1
+            raise RuntimeError(f"Bilibili add to season error ({code}): {msg}")
+
+        return {
+            "success": True,
+            "season_id": season_id,
+            "section_id": section_id,
+            "bvid": bvid,
+            "aid": aid,
+            "cid": cid,
+            "title": ep_title
+        }
+
+    def get_or_create_season(self, title: str, desc: str = "", cover: str = "") -> Dict[str, Any]:
+        """
+        Retrieves existing season with matching title, or creates a new one.
+        Prevents redundant season creation.
+        """
+        clean_title = title.strip()
+        existing = self.list_seasons(pn=1, ps=50)
+        for s in existing.get("seasons", []):
+            if s.get("title", "").strip().lower() == clean_title.lower():
+                return {
+                    "success": True,
+                    "season_id": s["id"],
+                    "section_id": s.get("section_id"),
+                    "title": s["title"],
+                    "reused": True,
+                }
+        
+        created = self.create_season(title=clean_title, desc=desc, cover=cover)
+        created["reused"] = False
+        return created
+
+
