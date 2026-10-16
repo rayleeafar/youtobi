@@ -435,8 +435,25 @@ class TaskManager:
         return self.tasks.get(task_id)
 
 
-    def list_tasks(self) -> List[Dict[str, Any]]:
-        return [t.to_dict() for t in sorted(self.tasks.values(), key=lambda x: x.created_at, reverse=True)]
+    def list_tasks(
+        self,
+        offset: int = 0,
+        limit: Optional[int] = None,
+        status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        all_sorted = sorted(self.tasks.values(), key=lambda x: x.created_at, reverse=True)
+        if status:
+            all_sorted = [t for t in all_sorted if t.status == status]
+        if limit is not None and limit > 0:
+            paged = all_sorted[offset:offset + limit]
+        else:
+            paged = all_sorted[offset:]
+        return [t.to_dict() for t in paged]
+
+    def count_tasks(self, status: Optional[str] = None) -> int:
+        if status:
+            return sum(1 for t in self.tasks.values() if t.status == status)
+        return len(self.tasks)
 
     def _sync_cookiecloud(self, task: Optional[Task] = None, required: bool = False) -> Tuple[Dict[str, str], Optional[str]]:
         """Sync fresh cookies from CookieCloud if configured and update config_manager.
