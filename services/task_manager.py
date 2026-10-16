@@ -7,6 +7,7 @@ import asyncio
 import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+import re
 from datetime import datetime
 
 from config import config_manager, BASE_DIR
@@ -61,7 +62,10 @@ class Task:
         custom_text: Optional[str] = None,
         skip_subtitles: bool = False,
         upload_targets: Optional[List[str]] = None,
-        secondary_creation: Optional[Dict[str, Any]] = None
+        secondary_creation: Optional[Dict[str, Any]] = None,
+        bilibili_season_mode: str = "create",
+        bilibili_season_id: Optional[int] = None,
+        bilibili_season_name: Optional[str] = None
     ):
         self.id = task_id
         self.youtube_url = youtube_url
@@ -69,6 +73,9 @@ class Task:
         self.skip_subtitles = skip_subtitles
         self.upload_targets = upload_targets if upload_targets is not None else ["bilibili"]
         self.secondary_creation = secondary_creation or {}
+        self.bilibili_season_mode = bilibili_season_mode or "create"
+        self.bilibili_season_id = bilibili_season_id
+        self.bilibili_season_name = bilibili_season_name
         self.status = "PENDING"  # PENDING, DOWNLOADING, SUBTITLE_PROCESSING, LLM_REGENERATION, UPLOADING, COMPLETED, FAILED, PAUSED
         self.progress = 0
         self.logs: List[str] = []
@@ -118,6 +125,9 @@ class Task:
             "skip_subtitles": self.skip_subtitles,
             "upload_targets": self.upload_targets,
             "secondary_creation": self.secondary_creation,
+            "bilibili_season_mode": self.bilibili_season_mode,
+            "bilibili_season_id": self.bilibili_season_id,
+            "bilibili_season_name": self.bilibili_season_name,
             "status": self.status,
             "progress": self.progress,
             "logs": self.logs,
@@ -183,7 +193,10 @@ class Task:
             custom_text=data.get("custom_text"),
             skip_subtitles=data.get("skip_subtitles", False),
             upload_targets=data.get("upload_targets", ["bilibili"]),
-            secondary_creation=data.get("secondary_creation", {})
+            secondary_creation=data.get("secondary_creation", {}),
+            bilibili_season_mode=data.get("bilibili_season_mode", "create"),
+            bilibili_season_id=data.get("bilibili_season_id"),
+            bilibili_season_name=data.get("bilibili_season_name")
         )
         task.status = data.get("status", "PENDING")
         task.progress = data.get("progress", 0)
@@ -259,7 +272,10 @@ class TaskManager:
         custom_text: Optional[str] = None,
         skip_subtitles: bool = False,
         upload_targets: Optional[List[str]] = None,
-        secondary_creation: Optional[Dict[str, Any]] = None
+        secondary_creation: Optional[Dict[str, Any]] = None,
+        bilibili_season_mode: str = "create",
+        bilibili_season_id: Optional[int] = None,
+        bilibili_season_name: Optional[str] = None
     ) -> Task:
         cfg = config_manager.all()
         if upload_targets is None:
@@ -281,7 +297,10 @@ class TaskManager:
             custom_text=custom_text,
             skip_subtitles=skip_subtitles,
             upload_targets=upload_targets,
-            secondary_creation=secondary_creation
+            secondary_creation=secondary_creation,
+            bilibili_season_mode=bilibili_season_mode,
+            bilibili_season_id=bilibili_season_id,
+            bilibili_season_name=bilibili_season_name
         )
         task._manager = self
         self.tasks[task_id] = task
@@ -297,7 +316,10 @@ class TaskManager:
         items: List[Dict[str, Any]],
         skip_subtitles: bool = False,
         upload_targets: Optional[List[str]] = None,
-        secondary_creation: Optional[Dict[str, Any]] = None
+        secondary_creation: Optional[Dict[str, Any]] = None,
+        bilibili_season_mode: str = "create",
+        bilibili_season_id: Optional[int] = None,
+        bilibili_season_name: Optional[str] = None
     ) -> List[Task]:
         created = []
         for item in items:
@@ -305,13 +327,19 @@ class TaskManager:
             custom = item.get("custom_text")
             item_targets = item.get("upload_targets", upload_targets)
             item_sec = item.get("secondary_creation", secondary_creation)
+            item_mode = item.get("bilibili_season_mode", bilibili_season_mode)
+            item_sid = item.get("bilibili_season_id", bilibili_season_id)
+            item_sname = item.get("bilibili_season_name", bilibili_season_name)
             if url:
                 task = self.create_task(
                     youtube_url=url,
                     custom_text=custom,
                     skip_subtitles=skip_subtitles,
                     upload_targets=item_targets,
-                    secondary_creation=item_sec
+                    secondary_creation=item_sec,
+                    bilibili_season_mode=item_mode,
+                    bilibili_season_id=item_sid,
+                    bilibili_season_name=item_sname
                 )
                 created.append(task)
         return created
@@ -898,6 +926,52 @@ class TaskManager:
                     err_msg = f"Bilibili upload error: {b_err}"
                     upload_errors.append(err_msg)
                     task.log(f"❌ {err_msg}")
+
+                # Handle Bilibili Season (合集) Collection - decoupled from video upload status
+                if task.bvid and str(task.bvid).startswith("BV") and "bilibili_upload" in task.completed_stages:
+                    try:
+                        season_mode = getattr(task, "bilibili_season_mode", "create") or "create"
+                        if season_mode == "none":
+                            task.log("Bilibili 合集设置: [不加入合集]，跳过合集归集。")
+                        elif season_mode == "existing" and getattr(task, "bilibili_season_id", None):
+                            sid = task.bilibili_season_id
+                            task.log(f"正在将视频加入指定已有合集 (Season ID: {sid})...")
+                            try:
+                                bili_service.add_to_season(season_id=int(sid), bvid=task.bvid)
+                                task.log(f"✓ 视频已成功加入已有合集 (Season ID: {sid})")
+                            except Exception as s_err:
+                                task.log(f"⚠️ 添加至已有合集失败（视频发布已成功）: {s_err}")
+                        elif season_mode in ("create", "auto"):
+                            # Determine season title: custom name > playlist title > title cleaned of EP/Part suffixes
+                            target_title = (getattr(task, "bilibili_season_name", None) or "").strip()
+                            if not target_title:
+                                pl_title = (task.youtube_info or {}).get("playlist_title") or (task.youtube_info or {}).get("playlist")
+                                if pl_title and isinstance(pl_title, str) and pl_title.strip():
+                                    target_title = pl_title.strip()
+                            if not target_title:
+                                raw_t = task.final_title or (task.youtube_info or {}).get("title") or "精选系列"
+                                cleaned = re.sub(r'[\(\[\{（【].*?[\)\]\}）】]', '', raw_t)
+                                cleaned = re.sub(r'(?:第\s*\d+\s*[集话期]|[EPep]+\s*\d+|#\d+|\bPart\s*\d+\b|\bP\d+\b).*$', '', cleaned, flags=re.IGNORECASE).strip(' -_|:：')
+                                target_title = cleaned[:40] if len(cleaned) >= 2 else raw_t[:40]
+                            
+                            task.log(f"正在将视频归入合集：《{target_title}》...")
+                            try:
+                                s_res = bili_service.get_or_create_season(title=target_title)
+                                sid = s_res.get("season_id") if isinstance(s_res, dict) else None
+                                if sid:
+                                    task.bilibili_season_id = sid
+                                    if isinstance(s_res, dict) and s_res.get("reused"):
+                                        task.log(f"已复用已有同名合集：《{target_title}》 (ID: {sid})")
+                                    else:
+                                        task.log(f"已新建合集：《{target_title}》 (ID: {sid})")
+                                    bili_service.add_to_season(season_id=int(sid), bvid=task.bvid, section_id=s_res.get("section_id") if isinstance(s_res, dict) else None)
+                                    task.log(f"✓ 视频已成功加入B站合集：《{target_title}》 (ID: {sid})")
+                                else:
+                                    task.log(f"⚠️ 创建合集未返回有效合集ID: {s_res}")
+                            except Exception as s_err:
+                                task.log(f"⚠️ 自动加入合集失败（视频发布已成功）: {s_err}")
+                    except Exception as all_s_err:
+                        task.log(f"⚠️ 处理合集归集异常（不影响视频发布状态）: {all_s_err}")
             elif self._stage_applies(task, "bilibili_upload"):
                 task.log(f"Skipping Bilibili upload; BV {task.bvid} already published.")
 
