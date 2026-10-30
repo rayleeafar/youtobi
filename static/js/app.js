@@ -1427,14 +1427,15 @@ function renderProxyBanner(data) {
 
   // Update default badge in task form
   if (defaultBadge) {
+    let modeDesc = '🌀 轮换隧道池 (10808)';
+    if (cfg.proxy_mode === 'pool_fastest') modeDesc = '⚡ 最快节点';
+    if (cfg.proxy_mode === 'custom') modeDesc = '🛠️ 自定义代理';
+    
     if (!cfg.proxy_enabled) {
-      defaultBadge.innerText = '当前全局默认: ⚡ 直连 (未启用代理)';
+      defaultBadge.innerText = `当前全局默认: ⚡ 直连 (未启用代理，配置指向: ${modeDesc})`;
       defaultBadge.style.color = 'var(--text-muted)';
     } else {
-      let modeDesc = '🌀 轮换隧道池 (10808)';
-      if (cfg.proxy_mode === 'pool_fastest') modeDesc = '⚡ 最快节点';
-      if (cfg.proxy_mode === 'custom') modeDesc = '🛠️ 自定义代理';
-      defaultBadge.innerText = `当前全局默认: ${modeDesc} (${data.resolved_proxy || '未解析'})`;
+      defaultBadge.innerText = `当前全局默认: ${modeDesc} (${data.resolved_proxy || data.configured_proxy || '未解析'})`;
       defaultBadge.style.color = 'var(--accent-cyan)';
     }
   }
@@ -1579,7 +1580,8 @@ function openProxyConfigModal() {
       <div>平台连接: ${pool.online ? '🟢 在线' : '🔴 离线 (' + (pool.error || '') + ')'}</div>
       <div>可用节点数: ${pool.nodes_count || 0}</div>
       <div>轮换隧道: ${pool.tunnel ? '端口 ' + pool.tunnel.port + ' (active: ' + (pool.tunnel.active_nodes_count || 0) + ')' : '未启用'}</div>
-      <div>当前解析代理: <code>${proxyPoolStatus.resolved_proxy || '无'}</code></div>
+      <div>当前配置代理: <code>${proxyPoolStatus.configured_proxy || proxyPoolStatus.resolved_proxy || '无'}</code></div>
+      <div>全局启用状态: ${proxyPoolStatus.config?.proxy_enabled ? '<span style="color:#00ff9d;">已启用</span>' : '<span style="color:#ff8a80;">未启用 (仅配置)</span>'}</div>
     `;
   }
 }
