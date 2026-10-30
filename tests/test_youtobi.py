@@ -236,9 +236,41 @@ class TestYoutobi(unittest.TestCase):
         res = self.client.post("/api/tasks", json={"youtube_url": ""})
         self.assertEqual(res.status_code, 400)
 
-        # Invalid domain test
-        res = self.client.post("/api/tasks", json={"youtube_url": "https://example.com"})
+        # Invalid URL string (not a URL)
+        res = self.client.post("/api/tasks", json={"youtube_url": "not-a-valid-url-at-all"})
         self.assertEqual(res.status_code, 400)
+
+        # Multi-platform valid URLs should be accepted (YouTube, Facebook, Bilibili, Twitter/X, TikTok)
+        from unittest.mock import patch
+        with patch("services.task_manager.TaskManager._run_task_pipeline"):
+            for valid_url in [
+                "https://www.youtube.com/watch?v=sample1",
+                "https://www.facebook.com/watch/?v=2456345791521094",
+                "https://www.bilibili.com/video/BV1xx411c7mD",
+                "https://twitter.com/user/status/1234567890",
+                "https://x.com/user/status/1234567890",
+                "https://www.tiktok.com/@user/video/1234567890"
+            ]:
+                res = self.client.post("/api/tasks", json={"youtube_url": valid_url})
+                self.assertEqual(res.status_code, 200)
+
+    def test_extract_items_multi_platform(self):
+        input_text = """https://www.facebook.com/watch/?v=2456345791521094 # FB精选短剧
+https://www.bilibili.com/video/BV1xx411c7mD
+# B站热门搬运
+https://x.com/user/status/987654321
+https://www.tiktok.com/@creator/video/1122334455 # TikTok爆款
+"""
+        items = YouTubeService.extract_items(input_text)
+        self.assertEqual(len(items), 4)
+        self.assertEqual(items[0]["url"], "https://www.facebook.com/watch/?v=2456345791521094")
+        self.assertEqual(items[0]["custom_text"], "FB精选短剧")
+        self.assertEqual(items[1]["url"], "https://www.bilibili.com/video/BV1xx411c7mD")
+        self.assertEqual(items[1]["custom_text"], "B站热门搬运")
+        self.assertEqual(items[2]["url"], "https://x.com/user/status/987654321")
+        self.assertIsNone(items[2]["custom_text"])
+        self.assertEqual(items[3]["url"], "https://www.tiktok.com/@creator/video/1122334455")
+        self.assertEqual(items[3]["custom_text"], "TikTok爆款")
 
     def test_youtube_extract_items_with_custom_text(self):
         input_text = """https://www.youtube.com/watch?v=video1
