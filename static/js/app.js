@@ -623,7 +623,7 @@ async function loadTasks(reset = false) {
       if (!container.querySelector('#emptyTaskListPlaceholder')) {
         container.innerHTML = `
           <div id="emptyTaskListPlaceholder" class="task-card" style="text-align: center; color: var(--text-muted); padding: 3rem;">
-            暂无活动任务，请在上方输入 YouTube 视频或播放列表链接开始。
+            暂无活动任务，请在上方输入视频链接开始。
           </div>`;
       }
       container._lastTasksJson = currentTasksJson;
