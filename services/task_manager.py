@@ -934,7 +934,8 @@ class TaskManager:
                         title=task.final_title,
                         description=task.final_description,
                         tags=task.final_tags,
-                        progress_callback=bili_upload_progress
+                        progress_callback=bili_upload_progress,
+                        source=task.youtube_url
                     )
                     task.bvid = upload_res.get("bvid") if isinstance(upload_res, dict) else "BV_SUCCESS"
                     self._complete(task, "bilibili_upload", {"bvid": task.bvid})
