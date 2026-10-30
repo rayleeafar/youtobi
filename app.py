@@ -886,6 +886,7 @@ async def get_proxy_status():
     tunnel = ProxyPoolService.fetch_tunnel_info() if pool_status.get("online") else None
     fastest = ProxyPoolService.fetch_fastest_node() if pool_status.get("online") else None
     resolved_active = ProxyPoolService.resolve_proxy_url("global")
+    configured_proxy = ProxyPoolService.resolve_proxy_url("global", ignore_enabled=True)
 
     return {
         "success": True,
@@ -904,17 +905,24 @@ async def get_proxy_status():
             "tunnel": tunnel,
             "fastest": fastest
         },
-        "resolved_proxy": resolved_active
+        "resolved_proxy": resolved_active,
+        "configured_proxy": configured_proxy
     }
 
 @app.post("/api/proxy/test")
 async def test_proxy(req: ProxyTestRequest):
-    """Tests specified proxy or currently active resolved proxy."""
+    """Tests specified proxy or currently configured/active proxy (even if proxy_enabled is False)."""
     target_proxy = req.proxy_url
     if not target_proxy:
-        target_proxy = ProxyPoolService.resolve_proxy_url("global")
+        # Resolve what proxy would be used according to current config, ignoring proxy_enabled toggle
+        target_proxy = ProxyPoolService.resolve_proxy_url("global", ignore_enabled=True)
     if not target_proxy:
-        raise HTTPException(status_code=400, detail="未指定代理地址，且全局未启用有效代理。")
+        # If pool_tunnel fallback needed, construct from pool address
+        tunnel = ProxyPoolService.fetch_tunnel_info()
+        if tunnel:
+            target_proxy = tunnel.get("http_proxy") or tunnel.get("socks5_proxy")
+    if not target_proxy:
+        raise HTTPException(status_code=400, detail="未能获取到可用代理节点或隧道地址，请检查代理池是否正常启动。")
     
     res = ProxyPoolService.test_proxy(target_proxy, test_target=req.target_url or "https://cloudflare.com/cdn-cgi/trace")
     return {
