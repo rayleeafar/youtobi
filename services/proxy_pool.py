@@ -109,11 +109,13 @@ class ProxyPoolService:
     @staticmethod
     def resolve_proxy_url(
         task_proxy_mode: Optional[str] = None,
-        task_proxy_url: Optional[str] = None
+        task_proxy_url: Optional[str] = None,
+        ignore_enabled: bool = False
     ) -> Optional[str]:
         """
-        Determines the actual proxy URL to use for a task.
+        Determines the actual proxy URL to use for a task or probe test.
         If task specifies custom settings, uses them; otherwise falls back to global settings.
+        If ignore_enabled=True, resolves the configured proxy URL even if global proxy_enabled is False.
         
         Returns:
             - None: direct connection (no proxy)
@@ -137,7 +139,7 @@ class ProxyPoolService:
 
         # If mode is "global" (or None), evaluate global config
         if mode == "global" or not task_proxy_mode:
-            if not cfg.get("proxy_enabled", False):
+            if not ignore_enabled and not cfg.get("proxy_enabled", False):
                 return None
             global_mode = cfg.get("proxy_mode", "pool_tunnel")
             
