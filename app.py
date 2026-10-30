@@ -309,11 +309,11 @@ def system_stats():
 async def create_task(req: TaskCreateRequest):
     input_text = req.youtube_url.strip()
     if not input_text:
-        raise HTTPException(status_code=400, detail="YouTube URL cannot be empty.")
+        raise HTTPException(status_code=400, detail="Video URL cannot be empty.")
     
     items = YouTubeService.extract_items(input_text)
     if not items:
-        raise HTTPException(status_code=400, detail="No valid YouTube URLs found in input.")
+        raise HTTPException(status_code=400, detail="No valid video URLs found in input.")
     
     sec_dict = req.secondary_creation.model_dump() if req.secondary_creation else None
     tasks = task_manager.create_batch_tasks(
