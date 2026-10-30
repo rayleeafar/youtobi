@@ -1711,6 +1711,13 @@ Second subtitle line
             self.assertTrue(test_data["success"])
             self.assertEqual(test_data["result"]["exit_ip"], "1.2.3.4")
 
+            # Test testing proxy when proxy_enabled is False (should still succeed using configured proxy)
+            config_manager.set("proxy_enabled", False)
+            with patch("services.proxy_pool.ProxyPoolService.fetch_tunnel_info", return_value={"http_proxy": "http://192.168.4.223:10808"}):
+                res_test_disabled = self.client.post("/api/proxy/test", json={})
+                self.assertEqual(res_test_disabled.status_code, 200)
+                self.assertTrue(res_test_disabled.json()["success"])
+
         # 4. Test task creation with proxy parameters
         with patch("services.task_manager.TaskManager._run_task_pipeline"):
             res_task = self.client.post("/api/tasks", json={
