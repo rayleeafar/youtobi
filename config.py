@@ -66,7 +66,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Output Settings
     "downloads_dir": str(DOWNLOADS_DIR),
     "auto_delete_after_upload": True,
-    "skip_subtitles": False
+    "skip_subtitles": False,
+
+    # Proxy and ProxyPool Configuration
+    "proxy_enabled": False,
+    "proxy_mode": "pool_tunnel",  # direct (off) / pool_tunnel / pool_fastest / custom
+    "proxy_pool_url": "http://192.168.4.223:8088",
+    "proxy_custom_url": ""
 }
 
 class ConfigManager:
