@@ -67,8 +67,8 @@
     <!-- Task Submission Card -->
     <div class="form-card">
       <div class="form-title" style="display: flex; justify-content: space-between; align-items: center;">
-        <span>🚀 提交 YouTube 视频 / 播放列表链接</span>
-        <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: var(--accent-purple); padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem;">支持单/多行 URL 及 播放列表 (Playlist)</span>
+        <span>🚀 提交视频链接 (YouTube / Facebook / B站 / X / TikTok 等)</span>
+        <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: var(--accent-purple); padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem;">支持全网多平台单/多行 URL 及 播放列表</span>
       </div>
       <form id="urlForm" onsubmit="handleFormSubmit(event)">
         <div class="url-input-group" style="flex-direction: column; align-items: stretch; gap: 0.8rem;">
@@ -76,7 +76,7 @@
             id="youtubeUrl" 
             class="input-field" 
             rows="3"
-            placeholder="粘贴 YouTube 视频或播放列表链接，多条链接可用换行分隔&#10;例如: https://www.youtube.com/watch?v=... &#10;或: https://www.youtube.com/playlist?list=..." 
+            placeholder="粘贴视频或播放列表链接，多条链接可用换行分隔&#10;支持 YouTube, Facebook, B站(Bilibili), Twitter/X, TikTok 等主流平台&#10;例如: https://www.facebook.com/watch/?v=... 或 https://www.youtube.com/watch?v=..." 
             required 
             style="resize: vertical; font-family: inherit; line-height: 1.4;"
           ></textarea>
@@ -178,7 +178,7 @@
       
       <div id="taskList">
         <div class="task-card" style="text-align: center; color: var(--text-muted); padding: 3rem;">
-          暂无活动任务，请在上方输入 YouTube 视频或播放列表链接开始。
+          暂无活动任务，请在上方输入视频链接开始。
         </div>
       </div>
       <div id="taskScrollStatus" style="text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 0.85rem; display: none;">
