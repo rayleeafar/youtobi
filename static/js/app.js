@@ -4,6 +4,10 @@ let hostStatsKickoff = null;
 let hostStatsPrev = null;
 const HOST_STATS_INTERVAL_MS = 15000;
 
+// Proxy & ProxyPool State
+let proxyPoolStatus = null;
+let proxyPoolTimer = null;
+
 // Pagination & Infinite Scroll State
 const TASKS_PAGE_SIZE = 12;
 let loadedTasksCount = 0;
@@ -18,6 +22,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadTasks();
   initTaskInfiniteScroll();
   loadBilibiliSeasons();
+  refreshProxyStatus();
+  proxyPoolTimer = setInterval(refreshProxyStatus, 20000);
   activePollInterval = setInterval(loadTasks, 3000);
   refreshHostStats();
   // Second sample shortly after load so bandwidth has a delta before the 15s cadence.
@@ -29,6 +35,7 @@ window.addEventListener('pagehide', () => {
   if (activePollInterval) clearInterval(activePollInterval);
   if (hostStatsTimer) clearInterval(hostStatsTimer);
   if (hostStatsKickoff) clearTimeout(hostStatsKickoff);
+  if (proxyPoolTimer) clearInterval(proxyPoolTimer);
   if (taskObserver) taskObserver.disconnect();
 });
 
@@ -390,6 +397,16 @@ async function handleFormSubmit(event) {
   const seasonIdVal = document.getElementById('bilibili_season_id') ? document.getElementById('bilibili_season_id').value : '';
   const seasonId = seasonIdVal ? parseInt(seasonIdVal, 10) : null;
 
+  // Task Proxy Mode & URL
+  const taskProxyModeEl = document.querySelector('input[name="task_proxy_mode"]:checked');
+  const taskProxyMode = taskProxyModeEl ? taskProxyModeEl.value : 'global';
+  let taskProxyUrl = null;
+  if (taskProxyMode === 'node') {
+    taskProxyUrl = document.getElementById('task_proxy_node_select') ? document.getElementById('task_proxy_node_select').value : '';
+  } else if (taskProxyMode === 'custom') {
+    taskProxyUrl = document.getElementById('task_proxy_custom_input') ? document.getElementById('task_proxy_custom_input').value.trim() : '';
+  }
+
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.innerText = '提交中...';
@@ -405,7 +422,9 @@ async function handleFormSubmit(event) {
         secondary_creation: secondaryCreation,
         bilibili_season_mode: seasonMode,
         bilibili_season_id: seasonId,
-        bilibili_season_name: seasonName
+        bilibili_season_name: seasonName,
+        proxy_mode: taskProxyMode,
+        proxy_url: taskProxyUrl
       })
     });
     const data = await res.json();
@@ -897,6 +916,16 @@ function renderTaskCard(task) {
     `;
   }
 
+  // Proxy badge
+  let proxyBadgeHtml = '';
+  if (task.proxy_mode === 'direct') {
+    proxyBadgeHtml = `<span class="tag-badge" style="background: rgba(148, 163, 184, 0.15); color: #94a3b8;">⚡ 直连</span>`;
+  } else if (task.proxy_mode === 'pool_tunnel') {
+    proxyBadgeHtml = `<span class="tag-badge" style="background: rgba(0, 240, 255, 0.15); color: var(--accent-cyan);">🌀 隧道代理</span>`;
+  } else if (task.proxy_mode === 'node' || task.proxy_mode === 'custom') {
+    proxyBadgeHtml = `<span class="tag-badge" style="background: rgba(0, 255, 157, 0.15); color: var(--accent-green, #00ff9d);">🌐 代理节点</span>`;
+  }
+
   return `
     <div class="task-card" id="task-card-${task.id}" data-task-id="${task.id}">
       <div class="task-header">
@@ -905,6 +934,7 @@ function renderTaskCard(task) {
             <span class="task-id">TASK #${task.id}</span>
             ${targetBadgesHtml}
             ${secBadgesHtml}
+            ${proxyBadgeHtml}
           </div>
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px;">
             <h3 style="font-size: 1.1rem; margin: 0;">${taskTitle}</h3>
@@ -1355,6 +1385,236 @@ async function handleCreateSeasonFromModal() {
     alert(`创建合集出错: ${e.message}`);
   }
 }
+
+// ==========================================
+// Proxy & ProxyPool Frontend Management
+// ==========================================
+
+async function refreshProxyStatus(forceProbe = false) {
+  try {
+    const res = await fetch('/api/proxy/status');
+    const data = await res.json();
+    if (!data.success) return;
+
+    proxyPoolStatus = data;
+    renderProxyBanner(data);
+    populateTaskProxyNodes(data.pool?.nodes || []);
+
+    if (forceProbe) {
+      testCurrentProxy();
+    }
+  } catch (err) {
+    console.error('refreshProxyStatus error:', err);
+  }
+}
+
+function renderProxyBanner(data) {
+  const cfg = data.config || {};
+  const pool = data.pool || {};
+  const statusText = document.getElementById('proxyPoolStatusText');
+  const activeExit = document.getElementById('proxyPoolActiveExit');
+  const latencyEl = document.getElementById('proxyPoolLatency');
+  const globalToggle = document.getElementById('globalProxyToggle');
+  const globalModeSelect = document.getElementById('globalProxyModeSelect');
+  const defaultBadge = document.getElementById('taskProxyDefaultBadge');
+
+  if (globalToggle) {
+    globalToggle.checked = !!cfg.proxy_enabled;
+  }
+  if (globalModeSelect && cfg.proxy_mode) {
+    globalModeSelect.value = cfg.proxy_mode;
+  }
+
+  // Update default badge in task form
+  if (defaultBadge) {
+    if (!cfg.proxy_enabled) {
+      defaultBadge.innerText = '当前全局默认: ⚡ 直连 (未启用代理)';
+      defaultBadge.style.color = 'var(--text-muted)';
+    } else {
+      let modeDesc = '🌀 轮换隧道池 (10808)';
+      if (cfg.proxy_mode === 'pool_fastest') modeDesc = '⚡ 最快节点';
+      if (cfg.proxy_mode === 'custom') modeDesc = '🛠️ 自定义代理';
+      defaultBadge.innerText = `当前全局默认: ${modeDesc} (${data.resolved_proxy || '未解析'})`;
+      defaultBadge.style.color = 'var(--accent-cyan)';
+    }
+  }
+
+  if (!pool.online) {
+    if (statusText) statusText.innerHTML = '<span style="color:#ff5252;">● 代理平台离线</span>';
+    if (activeExit) activeExit.innerText = '出口: —';
+    if (latencyEl) latencyEl.innerText = '延迟: —';
+    return;
+  }
+
+  const nodesCount = pool.nodes_count || 0;
+  if (statusText) {
+    statusText.innerHTML = `<span style="color:var(--accent-green,#00ff9d);">● 在线</span> (${nodesCount} 活跃节点)`;
+  }
+
+  const fastest = pool.fastest;
+  if (fastest) {
+    if (activeExit) activeExit.innerText = `出口: ${fastest.country || ''} ${fastest.exit_ip || '—'}`;
+    if (latencyEl) latencyEl.innerText = `最低: ${fastest.latency || '—'}ms`;
+  } else if (pool.tunnel) {
+    if (activeExit) activeExit.innerText = `出口: 轮换池 (:10808)`;
+    if (latencyEl) latencyEl.innerText = `延迟: 动态测速`;
+  }
+}
+
+function populateTaskProxyNodes(nodes) {
+  const select = document.getElementById('task_proxy_node_select');
+  if (!select) return;
+  const currVal = select.value;
+  select.innerHTML = '<option value="">-- 选择代理池节点 --</option>';
+
+  nodes.forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = n.http_proxy || `http://${n.address}`;
+    opt.textContent = `${n.name || '节点'} (${n.country || ''} - ${n.latency}ms - 出口 ${n.exit_ip || ''})`;
+    select.appendChild(opt);
+  });
+
+  if (currVal) {
+    select.value = currVal;
+  }
+}
+
+function handleTaskProxyModeChange() {
+  const checked = document.querySelector('input[name="task_proxy_mode"]:checked');
+  const val = checked ? checked.value : 'global';
+  const nodeGroup = document.getElementById('taskProxyNodeSelectGroup');
+  const customGroup = document.getElementById('taskProxyCustomInputGroup');
+
+  if (nodeGroup) nodeGroup.style.display = (val === 'node') ? 'block' : 'none';
+  if (customGroup) customGroup.style.display = (val === 'custom') ? 'block' : 'none';
+}
+
+async function handleGlobalProxyToggle(enabled) {
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy_enabled: enabled })
+    });
+    const d = await res.json();
+    if (d.success) {
+      refreshProxyStatus();
+    }
+  } catch (err) {
+    alert('修改代理开关失败: ' + err.message);
+  }
+}
+
+async function handleGlobalProxyModeChange(mode) {
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy_mode: mode })
+    });
+    const d = await res.json();
+    if (d.success) {
+      refreshProxyStatus();
+    }
+  } catch (err) {
+    alert('切换代理模式失败: ' + err.message);
+  }
+}
+
+async function testCurrentProxy(btn) {
+  let origText = '';
+  if (btn) {
+    origText = btn.innerText;
+    btn.disabled = true;
+    btn.innerText = '测试中...';
+  }
+  const latencyEl = document.getElementById('proxyPoolLatency');
+  const exitEl = document.getElementById('proxyPoolActiveExit');
+
+  try {
+    const res = await fetch('/api/proxy/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (data.success && data.result) {
+      const r = data.result;
+      if (latencyEl) latencyEl.innerText = `实测: ${r.latency_ms}ms`;
+      if (exitEl) exitEl.innerText = `出口: ${r.exit_ip}`;
+      if (btn) btn.innerText = '✅ 正常';
+    } else {
+      alert('代理测试失败: ' + (data.result?.error || data.detail || '未知错误'));
+      if (btn) btn.innerText = '❌ 失败';
+    }
+  } catch (err) {
+    alert('代理测试异常: ' + err.message);
+    if (btn) btn.innerText = '❌ 异常';
+  } finally {
+    setTimeout(() => {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerText = origText;
+      }
+    }, 2000);
+  }
+}
+
+function openProxyConfigModal() {
+  const modal = document.getElementById('proxyModal');
+  if (!modal) return;
+  modal.classList.add('active');
+
+  if (proxyPoolStatus && proxyPoolStatus.config) {
+    const poolUrlInput = document.getElementById('modal_proxy_pool_url');
+    const customUrlInput = document.getElementById('modal_proxy_custom_url');
+    if (poolUrlInput) poolUrlInput.value = proxyPoolStatus.config.proxy_pool_url || 'http://192.168.4.223:8088';
+    if (customUrlInput) customUrlInput.value = proxyPoolStatus.config.proxy_custom_url || '';
+  }
+
+  const summaryEl = document.getElementById('proxyModalNodeSummary');
+  if (summaryEl && proxyPoolStatus) {
+    const pool = proxyPoolStatus.pool || {};
+    summaryEl.innerHTML = `
+      <div>平台连接: ${pool.online ? '🟢 在线' : '🔴 离线 (' + (pool.error || '') + ')'}</div>
+      <div>可用节点数: ${pool.nodes_count || 0}</div>
+      <div>轮换隧道: ${pool.tunnel ? '端口 ' + pool.tunnel.port + ' (active: ' + (pool.tunnel.active_nodes_count || 0) + ')' : '未启用'}</div>
+      <div>当前解析代理: <code>${proxyPoolStatus.resolved_proxy || '无'}</code></div>
+    `;
+  }
+}
+
+function closeProxyConfigModal() {
+  const modal = document.getElementById('proxyModal');
+  if (modal) modal.classList.remove('active');
+}
+
+async function saveProxyPoolConfig() {
+  const poolUrl = document.getElementById('modal_proxy_pool_url') ? document.getElementById('modal_proxy_pool_url').value.trim() : '';
+  const customUrl = document.getElementById('modal_proxy_custom_url') ? document.getElementById('modal_proxy_custom_url').value.trim() : '';
+
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proxy_pool_url: poolUrl,
+        proxy_custom_url: customUrl
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert('代理配置保存成功！');
+      closeProxyConfigModal();
+      refreshProxyStatus(true);
+    } else {
+      alert('保存失败: ' + (data.detail || '未知错误'));
+    }
+  } catch (err) {
+    alert('保存出错: ' + err.message);
+  }
+}
+
 
 
 
