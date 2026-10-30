@@ -225,7 +225,8 @@ class BilibiliService:
         title: str,
         description: str,
         tags: List[str],
-        progress_callback: Optional[Callable[[int, str], None]] = None
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        source: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Uploads video to Bilibili using biliup engine / Web Upload API.
@@ -234,6 +235,7 @@ class BilibiliService:
         title = title[:80]
         description = description[:2000]
         video_path = Path(video_path)
+        source_url = str(source).strip() if source else "https://youtube.com"
 
         if not video_path.exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -320,7 +322,7 @@ class BilibiliService:
                 tid=21,
                 tags=tags[:12],
                 original=False,
-                source="https://youtube.com"
+                source=source_url
             )
 
             uploader = video_uploader.VideoUploader(pages=pages, meta=meta, credential=cred)
@@ -414,7 +416,7 @@ class BilibiliService:
                         "--submit", "b-cut-android",
                         "--copyright", "2",
                         "--cover", str(cover_path),
-                        "--source", "https://youtube.com",
+                        "--source", source_url,
                         "--tid", "21",
                         "--title", title,
                         "--desc", description,
@@ -552,7 +554,7 @@ class BilibiliService:
             add_url = f"https://member.bilibili.com/x/vu/web/add/v3?csrf={self.bili_jct}"
             payload = {
                 "copyright": 2,
-                "source": "https://youtube.com",
+                "source": source_url,
                 "title": title,
                 "tid": 21,
                 "tag": ",".join(tags[:12]),
