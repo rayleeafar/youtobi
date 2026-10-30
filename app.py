@@ -221,6 +221,8 @@ class TaskCreateRequest(BaseModel):
     bilibili_season_mode: Optional[str] = "create"
     bilibili_season_id: Optional[int] = None
     bilibili_season_name: Optional[str] = None
+    proxy_mode: Optional[str] = None
+    proxy_url: Optional[str] = None
 
 class SkipSubtitlesRequest(BaseModel):
     skip: Optional[bool] = True
@@ -262,6 +264,10 @@ class ConfigUpdateRequest(BaseModel):
     secondary_watermark_enabled: Optional[bool] = None
     secondary_watermark_text: Optional[str] = None
     secondary_watermark_opacity: Optional[float] = None
+    proxy_enabled: Optional[bool] = None
+    proxy_mode: Optional[str] = None
+    proxy_pool_url: Optional[str] = None
+    proxy_custom_url: Optional[str] = None
 
 
 from services.youtube import YouTubeService
@@ -323,7 +329,9 @@ async def create_task(req: TaskCreateRequest):
         secondary_creation=sec_dict,
         bilibili_season_mode=req.bilibili_season_mode or "create",
         bilibili_season_id=req.bilibili_season_id,
-        bilibili_season_name=req.bilibili_season_name
+        bilibili_season_name=req.bilibili_season_name,
+        proxy_mode=req.proxy_mode,
+        proxy_url=req.proxy_url
     )
     return {
         "success": True,
@@ -861,6 +869,58 @@ async def test_youtube_api(req: Optional[YouTubeTestRequest] = None):
     except Exception as e:
         logger.error(f"YouTube API test error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+from services.proxy_pool import ProxyPoolService
+
+class ProxyTestRequest(BaseModel):
+    proxy_url: Optional[str] = None
+    target_url: Optional[str] = "https://cloudflare.com/cdn-cgi/trace"
+
+@app.get("/api/proxy/status")
+async def get_proxy_status():
+    """Returns proxy pool connectivity, node count, fastest node and resolved active proxy info."""
+    cfg = config_manager.all()
+    pool_status = ProxyPoolService.fetch_pool_status()
+    nodes = ProxyPoolService.fetch_nodes() if pool_status.get("online") else []
+    tunnel = ProxyPoolService.fetch_tunnel_info() if pool_status.get("online") else None
+    fastest = ProxyPoolService.fetch_fastest_node() if pool_status.get("online") else None
+    resolved_active = ProxyPoolService.resolve_proxy_url("global")
+
+    return {
+        "success": True,
+        "config": {
+            "proxy_enabled": cfg.get("proxy_enabled", False),
+            "proxy_mode": cfg.get("proxy_mode", "pool_tunnel"),
+            "proxy_pool_url": cfg.get("proxy_pool_url", "http://192.168.4.223:8088"),
+            "proxy_custom_url": cfg.get("proxy_custom_url", "")
+        },
+        "pool": {
+            "online": pool_status.get("online", False),
+            "error": pool_status.get("error"),
+            "status": pool_status.get("data"),
+            "nodes_count": len(nodes),
+            "nodes": nodes,
+            "tunnel": tunnel,
+            "fastest": fastest
+        },
+        "resolved_proxy": resolved_active
+    }
+
+@app.post("/api/proxy/test")
+async def test_proxy(req: ProxyTestRequest):
+    """Tests specified proxy or currently active resolved proxy."""
+    target_proxy = req.proxy_url
+    if not target_proxy:
+        target_proxy = ProxyPoolService.resolve_proxy_url("global")
+    if not target_proxy:
+        raise HTTPException(status_code=400, detail="未指定代理地址，且全局未启用有效代理。")
+    
+    res = ProxyPoolService.test_proxy(target_proxy, test_target=req.target_url or "https://cloudflare.com/cdn-cgi/trace")
+    return {
+        "success": res.get("success", False),
+        "result": res
+    }
 
 
 if __name__ == "__main__":
