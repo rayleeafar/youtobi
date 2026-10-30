@@ -64,6 +64,29 @@
       </div>
     </section>
 
+    <!-- Global Proxy Pool Status Bar -->
+    <section class="proxy-banner" id="proxyBanner" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem 1.2rem; margin: -0.5rem 0 1.5rem; padding: 0.65rem 1rem; background: var(--panel-bg); backdrop-filter: blur(16px); border: 1px solid var(--panel-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-glow);">
+      <div style="display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;">
+        <span style="font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; color: #051329; background: linear-gradient(135deg, var(--neon-cyan, #00f0ff), var(--accent-emerald, #00ff9d)); border-radius: 999px; padding: 0.15rem 0.6rem;">🌐 代理池 PROXYPOOL</span>
+        <span id="proxyPoolStatusText" style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">检测中...</span>
+        <span id="proxyPoolActiveExit" style="font-size: 0.8rem; font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan); background: rgba(0, 240, 255, 0.08); padding: 0.15rem 0.5rem; border-radius: 4px; border: 1px solid rgba(0, 240, 255, 0.2);">出口: —</span>
+        <span id="proxyPoolLatency" style="font-size: 0.8rem; font-family: 'JetBrains Mono', monospace; color: var(--accent-green, #00ff9d);">延迟: —</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+        <label class="toggle-switch" style="font-size: 0.82rem; margin: 0;">
+          <input type="checkbox" id="globalProxyToggle" onchange="handleGlobalProxyToggle(this.checked)">
+          <span>全局启用代理下载</span>
+        </label>
+        <select id="globalProxyModeSelect" class="input-field" style="font-size: 0.8rem; padding: 0.25rem 0.6rem; width: auto;" onchange="handleGlobalProxyModeChange(this.value)">
+          <option value="pool_tunnel">🌀 隧道自动轮换 (Tunnel 10808)</option>
+          <option value="pool_fastest">⚡ 最低延迟节点 (Fastest Node)</option>
+          <option value="custom">🛠️ 自定义代理 (Custom Proxy)</option>
+        </select>
+        <button type="button" class="btn btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" onclick="testCurrentProxy(this)">🧪 测试连通</button>
+        <button type="button" class="btn btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" onclick="openProxyConfigModal()">⚙️ 代理池设置</button>
+      </div>
+    </section>
+
     <!-- Task Submission Card -->
     <div class="form-card">
       <div class="form-title" style="display: flex; justify-content: space-between; align-items: center;">
@@ -125,6 +148,46 @@
               <select id="bilibili_season_id" class="input-field" style="font-size: 0.85rem; padding: 0.5rem 0.8rem;">
                 <option value="">-- 选择已有合集 --</option>
               </select>
+            </div>
+          </div>
+
+          <!-- Task Proxy Settings Option -->
+          <div id="taskProxyCard" style="background: rgba(10, 14, 23, 0.6); border: 1px solid var(--panel-border); border-radius: var(--radius-md); padding: 0.8rem 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+              <label style="font-size: 0.85rem; font-weight: 600; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
+                <span>🌐 网络代理设置 (Proxy Routing):</span>
+              </label>
+              <span id="taskProxyDefaultBadge" style="font-size: 0.75rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">当前全局默认: 直连</span>
+            </div>
+            <div style="display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 0.5rem; font-size: 0.85rem;">
+              <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                <input type="radio" name="task_proxy_mode" value="global" checked onchange="handleTaskProxyModeChange()">
+                <span>跟随全局配置 (默认)</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                <input type="radio" name="task_proxy_mode" value="direct" onchange="handleTaskProxyModeChange()">
+                <span>⚡ 直连下载 (不走代理)</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                <input type="radio" name="task_proxy_mode" value="pool_tunnel" onchange="handleTaskProxyModeChange()">
+                <span>🌀 轮换隧道池 (Tunnel)</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                <input type="radio" name="task_proxy_mode" value="node" onchange="handleTaskProxyModeChange()">
+                <span>📍 指定特定节点</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                <input type="radio" name="task_proxy_mode" value="custom" onchange="handleTaskProxyModeChange()">
+                <span>✏️ 自定义代理地址</span>
+              </label>
+            </div>
+            <div id="taskProxyNodeSelectGroup" style="display: none; margin-top: 0.4rem;">
+              <select id="task_proxy_node_select" class="input-field" style="font-size: 0.85rem; padding: 0.45rem 0.8rem;">
+                <option value="">-- 选择代理池节点 --</option>
+              </select>
+            </div>
+            <div id="taskProxyCustomInputGroup" style="display: none; margin-top: 0.4rem;">
+              <input type="text" id="task_proxy_custom_input" class="input-field" placeholder="例如: http://192.168.4.223:20001 或 socks5://127.0.0.1:10808" style="font-size: 0.85rem; padding: 0.45rem 0.8rem;">
             </div>
           </div>
 
@@ -467,6 +530,45 @@
 
       <div id="seasonsModalList" style="flex: 1; overflow-y: auto; padding: 1rem 0; display: flex; flex-direction: column; gap: 0.8rem;">
         <div style="text-align: center; color: var(--text-muted); padding: 2rem;">加载合集中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Proxy Config Modal -->
+  <div class="modal-overlay" id="proxyModal">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3 style="font-size: 1.15rem; font-weight: 700; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+          <span>🌐 Cyber ProxyPool 代理池配置与节点</span>
+        </h3>
+        <button class="btn btn-secondary" style="padding: 0.3rem 0.6rem;" onclick="closeProxyConfigModal()">✕</button>
+      </div>
+
+      <div style="margin: 1rem 0; display: flex; flex-direction: column; gap: 1rem;">
+        <div class="form-group">
+          <label for="modal_proxy_pool_url">ProxyPool API 平台地址</label>
+          <input type="text" id="modal_proxy_pool_url" class="input-field" placeholder="http://192.168.4.223:8088">
+        </div>
+
+        <div class="form-group">
+          <label for="modal_proxy_custom_url">自定义代理地址 (备用/直配)</label>
+          <input type="text" id="modal_proxy_custom_url" class="input-field" placeholder="http://127.0.0.1:7890 或 socks5://...">
+        </div>
+
+        <div style="background: rgba(0, 240, 255, 0.05); border: 1px solid var(--panel-border); border-radius: var(--radius-md); padding: 0.8rem 1rem;">
+          <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.4rem;">节点状态概览</div>
+          <div id="proxyModalNodeSummary" style="font-size: 0.8rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">
+            加载中...
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem;">
+        <button type="button" class="btn btn-secondary" onclick="refreshProxyStatus(true)">🔄 重新探测代理</button>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" class="btn btn-secondary" onclick="closeProxyConfigModal()">关闭</button>
+          <button type="button" class="btn btn-primary" onclick="saveProxyPoolConfig()">保存代理配置</button>
+        </div>
       </div>
     </div>
   </div>
