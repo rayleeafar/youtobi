@@ -46,9 +46,10 @@ def progress_from_hook(hook: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 class YouTubeService:
-    def __init__(self, downloads_dir: Path):
+    def __init__(self, downloads_dir: Path, proxy: Optional[str] = None):
         self.downloads_dir = Path(downloads_dir)
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
+        self.proxy = proxy.strip() if proxy else None
 
     @staticmethod
     def extract_items(input_text: str) -> List[Dict[str, Optional[str]]]:
@@ -158,6 +159,8 @@ class YouTubeService:
             "remote_components": ["ejs:github"],
             "js_runtimes": {"deno": {}, "node": {}},
         }
+        if self.proxy:
+            ydl_opts["proxy"] = self.proxy
         cookie_file = self._get_cookie_file()
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file
@@ -236,6 +239,8 @@ class YouTubeService:
             "remote_components": ["ejs:github"],
             "js_runtimes": {"deno": {}, "node": {}},
         }
+        if self.proxy:
+            ydl_opts["proxy"] = self.proxy
         cookie_file = self._get_cookie_file()
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file
