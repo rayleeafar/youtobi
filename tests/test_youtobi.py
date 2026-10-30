@@ -1669,6 +1669,60 @@ Second subtitle line
         self.assertEqual(data["offset"], 0)
         self.assertEqual(data["limit"], 2)
 
+    def test_proxy_pool_service_and_endpoints(self):
+        from services.proxy_pool import ProxyPoolService
+        from unittest.mock import patch
+
+        # 1. Test ProxyPoolService resolution
+        config_manager.set("proxy_enabled", True)
+        config_manager.set("proxy_mode", "pool_tunnel")
+        config_manager.set("proxy_pool_url", "http://192.168.4.223:8088")
+
+        with patch("services.proxy_pool.ProxyPoolService.fetch_tunnel_info", return_value={"http_proxy": "http://192.168.4.223:10808"}):
+            resolved = ProxyPoolService.resolve_proxy_url("global")
+            self.assertEqual(resolved, "http://192.168.4.223:10808")
+
+        # Task specific override to direct (should bypass global proxy)
+        self.assertIsNone(ProxyPoolService.resolve_proxy_url("direct"))
+
+        # Task specific override to custom
+        self.assertEqual(ProxyPoolService.resolve_proxy_url("custom", "http://127.0.0.1:7890"), "http://127.0.0.1:7890")
+
+        # Task specific override to node
+        self.assertEqual(ProxyPoolService.resolve_proxy_url("node", "http://192.168.4.223:20001"), "http://192.168.4.223:20001")
+
+        # 2. Test /api/proxy/status endpoint
+        with patch("services.proxy_pool.ProxyPoolService.fetch_pool_status", return_value={"online": True, "data": {"version": "1.0"}}), \
+             patch("services.proxy_pool.ProxyPoolService.fetch_nodes", return_value=[{"id": "n1", "name": "Node 1"}]), \
+             patch("services.proxy_pool.ProxyPoolService.fetch_tunnel_info", return_value={"port": 10808}), \
+             patch("services.proxy_pool.ProxyPoolService.fetch_fastest_node", return_value={"latency": 50}):
+            res = self.client.get("/api/proxy/status")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertTrue(data["success"])
+            self.assertTrue(data["pool"]["online"])
+            self.assertEqual(data["pool"]["nodes_count"], 1)
+
+        # 3. Test /api/proxy/test endpoint
+        with patch("services.proxy_pool.ProxyPoolService.test_proxy", return_value={"success": True, "latency_ms": 30, "exit_ip": "1.2.3.4"}):
+            res_test = self.client.post("/api/proxy/test", json={"proxy_url": "http://192.168.4.223:10808"})
+            self.assertEqual(res_test.status_code, 200)
+            test_data = res_test.json()
+            self.assertTrue(test_data["success"])
+            self.assertEqual(test_data["result"]["exit_ip"], "1.2.3.4")
+
+        # 4. Test task creation with proxy parameters
+        with patch("services.task_manager.TaskManager._run_task_pipeline"):
+            res_task = self.client.post("/api/tasks", json={
+                "youtube_url": "https://www.youtube.com/watch?v=proxy_task_test",
+                "proxy_mode": "node",
+                "proxy_url": "http://192.168.4.223:20001"
+            })
+            self.assertEqual(res_task.status_code, 200)
+            task_dict = res_task.json()["task"]
+            self.assertEqual(task_dict["proxy_mode"], "node")
+            self.assertEqual(task_dict["proxy_url"], "http://192.168.4.223:20001")
+
 
 if __name__ == "__main__":
     unittest.main()
