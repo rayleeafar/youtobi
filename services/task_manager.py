@@ -65,7 +65,9 @@ class Task:
         secondary_creation: Optional[Dict[str, Any]] = None,
         bilibili_season_mode: str = "create",
         bilibili_season_id: Optional[int] = None,
-        bilibili_season_name: Optional[str] = None
+        bilibili_season_name: Optional[str] = None,
+        proxy_mode: Optional[str] = None,
+        proxy_url: Optional[str] = None
     ):
         self.id = task_id
         self.youtube_url = youtube_url
@@ -76,6 +78,8 @@ class Task:
         self.bilibili_season_mode = bilibili_season_mode or "create"
         self.bilibili_season_id = bilibili_season_id
         self.bilibili_season_name = bilibili_season_name
+        self.proxy_mode = proxy_mode  # None / "global" / "direct" / "pool_tunnel" / "pool_fastest" / "node" / "custom"
+        self.proxy_url = proxy_url    # specific node or custom url
         self.status = "PENDING"  # PENDING, DOWNLOADING, SUBTITLE_PROCESSING, LLM_REGENERATION, UPLOADING, COMPLETED, FAILED, PAUSED
         self.progress = 0
         self.logs: List[str] = []
@@ -128,6 +132,8 @@ class Task:
             "bilibili_season_mode": self.bilibili_season_mode,
             "bilibili_season_id": self.bilibili_season_id,
             "bilibili_season_name": self.bilibili_season_name,
+            "proxy_mode": self.proxy_mode,
+            "proxy_url": self.proxy_url,
             "status": self.status,
             "progress": self.progress,
             "logs": self.logs,
@@ -196,7 +202,9 @@ class Task:
             secondary_creation=data.get("secondary_creation", {}),
             bilibili_season_mode=data.get("bilibili_season_mode", "create"),
             bilibili_season_id=data.get("bilibili_season_id"),
-            bilibili_season_name=data.get("bilibili_season_name")
+            bilibili_season_name=data.get("bilibili_season_name"),
+            proxy_mode=data.get("proxy_mode"),
+            proxy_url=data.get("proxy_url")
         )
         task.status = data.get("status", "PENDING")
         task.progress = data.get("progress", 0)
@@ -275,7 +283,9 @@ class TaskManager:
         secondary_creation: Optional[Dict[str, Any]] = None,
         bilibili_season_mode: str = "create",
         bilibili_season_id: Optional[int] = None,
-        bilibili_season_name: Optional[str] = None
+        bilibili_season_name: Optional[str] = None,
+        proxy_mode: Optional[str] = None,
+        proxy_url: Optional[str] = None
     ) -> Task:
         cfg = config_manager.all()
         if upload_targets is None:
@@ -300,7 +310,9 @@ class TaskManager:
             secondary_creation=secondary_creation,
             bilibili_season_mode=bilibili_season_mode,
             bilibili_season_id=bilibili_season_id,
-            bilibili_season_name=bilibili_season_name
+            bilibili_season_name=bilibili_season_name,
+            proxy_mode=proxy_mode,
+            proxy_url=proxy_url
         )
         task._manager = self
         self.tasks[task_id] = task
@@ -319,7 +331,9 @@ class TaskManager:
         secondary_creation: Optional[Dict[str, Any]] = None,
         bilibili_season_mode: str = "create",
         bilibili_season_id: Optional[int] = None,
-        bilibili_season_name: Optional[str] = None
+        bilibili_season_name: Optional[str] = None,
+        proxy_mode: Optional[str] = None,
+        proxy_url: Optional[str] = None
     ) -> List[Task]:
         created = []
         for item in items:
@@ -330,6 +344,8 @@ class TaskManager:
             item_mode = item.get("bilibili_season_mode", bilibili_season_mode)
             item_sid = item.get("bilibili_season_id", bilibili_season_id)
             item_sname = item.get("bilibili_season_name", bilibili_season_name)
+            item_pmode = item.get("proxy_mode", proxy_mode)
+            item_purl = item.get("proxy_url", proxy_url)
             if url:
                 task = self.create_task(
                     youtube_url=url,
@@ -339,7 +355,9 @@ class TaskManager:
                     secondary_creation=item_sec,
                     bilibili_season_mode=item_mode,
                     bilibili_season_id=item_sid,
-                    bilibili_season_name=item_sname
+                    bilibili_season_name=item_sname,
+                    proxy_mode=item_pmode,
+                    proxy_url=item_purl
                 )
                 created.append(task)
         return created
@@ -704,7 +722,16 @@ class TaskManager:
 
             cfg = config_manager.all()
             downloads_dir = Path(cfg.get("downloads_dir", "./downloads"))
-            yt_service = YouTubeService(downloads_dir)
+            
+            # Resolve proxy for this task (task-specific or global)
+            from services.proxy_pool import ProxyPoolService
+            resolved_proxy = ProxyPoolService.resolve_proxy_url(task.proxy_mode, task.proxy_url)
+            if resolved_proxy:
+                task.log(f"Using proxy for download: {resolved_proxy}")
+            else:
+                task.log("Connecting directly (no proxy configured for this task)")
+            
+            yt_service = YouTubeService(downloads_dir, proxy=resolved_proxy)
 
             if self._can_skip(task, "metadata"):
                 if self._stopped(task):
