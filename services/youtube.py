@@ -76,7 +76,7 @@ class YouTubeService:
                 else:
                     url_part = line.strip()
 
-                if "youtube.com" in url_part or "youtu.be" in url_part:
+                if url_part.startswith("http://") or url_part.startswith("https://"):
                     if current_url:
                         items.append({
                             "url": current_url,
