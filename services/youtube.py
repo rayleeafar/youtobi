@@ -158,6 +158,8 @@ class YouTubeService:
             "writeautomaticsub": True,
             "remote_components": ["ejs:github"],
             "js_runtimes": {"deno": {}, "node": {}},
+            "socket_timeout": 30,
+            "retries": 10,
         }
         if self.proxy:
             ydl_opts["proxy"] = self.proxy
@@ -238,6 +240,11 @@ class YouTubeService:
             "merge_output_format": "mp4",
             "remote_components": ["ejs:github"],
             "js_runtimes": {"deno": {}, "node": {}},
+            "continuedl": True,
+            "retries": 20,
+            "fragment_retries": 30,
+            "skip_unavailable_fragments": True,
+            "socket_timeout": 60,
         }
         if self.proxy:
             ydl_opts["proxy"] = self.proxy
