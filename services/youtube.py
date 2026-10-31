@@ -172,7 +172,31 @@ class YouTubeService:
                 info = ydl.extract_info(url, download=False)
         except Exception as e:
             err_msg = str(e)
-            if cookie_file and any(ind in err_msg for ind in ["The page needs to be reloaded", "cookies are no longer valid", "not a bot"]):
+            is_proxy_err = self.proxy and any(
+                ind in err_msg for ind in [
+                    "Tunnel connection failed",
+                    "UNEXPECTED_EOF_WHILE_READING",
+                    "ProxyError",
+                    "Cannot connect to proxy",
+                    "Failed to establish a new connection",
+                    "Connection refused",
+                    "Bad Gateway",
+                    "502",
+                    "503",
+                    "504",
+                ]
+            )
+            if is_proxy_err:
+                logger.warning(f"Proxy {self.proxy} failed ({err_msg}). Retrying extract_info directly without proxy...")
+                ydl_opts_fallback = ydl_opts.copy()
+                ydl_opts_fallback.pop("proxy", None)
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                except Exception as direct_e:
+                    logger.warning(f"Direct extract_info also failed: {direct_e}")
+                    raise
+            elif cookie_file and any(ind in err_msg for ind in ["The page needs to be reloaded", "cookies are no longer valid", "not a bot"]):
                 logger.warning(f"YouTube cookies rejected ({err_msg}). Retrying extract_info without cookies...")
                 ydl_opts_fallback = ydl_opts.copy()
                 ydl_opts_fallback.pop("cookiefile", None)
@@ -265,7 +289,31 @@ class YouTubeService:
                 info = ydl.extract_info(url, download=True)
         except Exception as e:
             err_msg = str(e)
-            if cookie_file and any(ind in err_msg for ind in ["The page needs to be reloaded", "cookies are no longer valid", "not a bot"]):
+            is_proxy_err = self.proxy and any(
+                ind in err_msg for ind in [
+                    "Tunnel connection failed",
+                    "UNEXPECTED_EOF_WHILE_READING",
+                    "ProxyError",
+                    "Cannot connect to proxy",
+                    "Failed to establish a new connection",
+                    "Connection refused",
+                    "Bad Gateway",
+                    "502",
+                    "503",
+                    "504",
+                ]
+            )
+            if is_proxy_err:
+                logger.warning(f"Proxy {self.proxy} failed during download ({err_msg}). Retrying download directly without proxy...")
+                ydl_opts_fallback = ydl_opts.copy()
+                ydl_opts_fallback.pop("proxy", None)
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                except Exception as direct_e:
+                    logger.warning(f"Direct download also failed: {direct_e}")
+                    raise
+            elif cookie_file and any(ind in err_msg for ind in ["The page needs to be reloaded", "cookies are no longer valid", "not a bot"]):
                 logger.warning(f"YouTube cookies rejected during download ({err_msg}). Retrying download without cookies...")
                 ydl_opts_fallback = ydl_opts.copy()
                 ydl_opts_fallback.pop("cookiefile", None)
