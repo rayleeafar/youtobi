@@ -15,6 +15,7 @@
    - [2.5 主机磁盘空间暴满与自动化清理](#25-主机磁盘空间暴满与自动化清理)
    - [2.6 Bilibili 报 "preupload HTTP 403 出错啦/未登录页面"](#26-bilibili-报-preupload-http-403-出错啦未登录页面)
    - [2.7 前端轮询导致选中文本失去焦点与页面闪烁](#27-前端轮询导致选中文本失去焦点与页面闪烁)
+   - [2.8 超大视频断流、代理池对接与自愈降级](#28-超大视频断流代理池对接与自愈降级-resilience--proxypool)
 3. [方案 A：全新机器一步到位部署指南](#3-方案-a全新机器一步到位部署指南)
 4. [方案 B：跨机器数据无损热迁移 SOP](#4-方案-b跨机器数据无损热迁移-sop)
 5. [系统服务与自启动配置 (systemd)](#5-系统服务与自启动配置-systemd)
@@ -146,6 +147,20 @@
   1. **主动选择守卫**：在 `loadTasks` 执行前检测 `window.getSelection()`，当用户在任务卡片区域有活动高亮选区时，自动推迟当前周期的 DOM 更新，绝不打断复制操作。
   2. **JSON 无变动跳过**：当任务列表数据未变动时，完全不触碰 DOM，杜绝无意义重绘。
   3. **单卡差量更新 (Differential Patching)**：为每张任务卡片绑定 `id="task-card-${id}"`，仅当该任务卡片数据实际发生变化时，精准替换对应单张卡片节点，其他卡片与页面焦点完全不受干扰。
+
+---
+
+### 2.8 超大视频断流、代理池对接与自愈降级 (Resilience & ProxyPool)
+
+* **现象**：
+  下载时长达数小时（如 3.7 小时、数 GB）的 Facebook/YouTube 超长剧集视频时，下载途中偶发 `BrokenPipeError(32, 'Broken pipe')`，或使用代理节点下载时遭遇平台阻断返回 `[SSL: UNEXPECTED_EOF_WHILE_READING]`。
+* **根本原因**：
+  1. `yt-dlp` 默认配置未开启断点续传（`continuedl`）与多级切片重试，长时间连接出现网络波动时整个下载直接中断退出。
+  2. 某些代理池节点的出海 IP 或 TLS 行为受到特定平台（如 Facebook Edge）的防爬策略拦截，导致通过代理握手被 RST。
+* **解决与预防措施**：
+  1. **下载韧性加固**：在 `services/youtube.py` 中深度注入 `continuedl: True`（支持 `.part` 续传）、`retries: 20`、`fragment_retries: 30`、`socket_timeout: 60`。
+  2. **自愈降级（Self-Healing Fallback）**：系统在检测到代理报错（如 `UNEXPECTED_EOF_WHILE_READING`、`Tunnel connection failed`、`502 Bad Gateway`、`ProxyError`）时，自动打印告警并无缝降级为**直连重试**，无需人工干预即可顺利完成大文件下载。
+  3. **ProxyPool 多级策略**：全局或任务单项均支持指定为直连（`direct`）、代理池隧道（`pool_tunnel`）、最低延迟节点（`pool_fastest`）或独立节点。
 
 ---
 
