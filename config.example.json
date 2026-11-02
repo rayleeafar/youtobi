@@ -36,5 +36,9 @@
   "secondary_watermark_opacity": 0.012,
   "downloads_dir": "./downloads",
   "auto_delete_after_upload": true,
-  "skip_subtitles": false
+  "skip_subtitles": false,
+  "proxy_enabled": false,
+  "proxy_mode": "pool_tunnel",
+  "proxy_pool_url": "http://192.168.4.223:8088",
+  "proxy_custom_url": ""
 }
