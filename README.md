@@ -1,8 +1,8 @@
-# youtobi - YouTube & Bilibili Automated Video Processing & Publishing System
+# youtobi - Multi-Platform Video Processing & Dual-Platform Publishing System
 
 <p align="center">
-  <b>一站式 YouTube / Bilibili 视频搬运、智能二创、双平台同步自动化系统</b><br>
-  <i>All-in-One Automated Video Downloader, Secondary Creation, Subtitle Burn-in, and Multi-Platform Publishing Engine</i>
+  <b>一站式多平台（YouTube / Facebook / Bilibili / Twitter / TikTok）视频搬运、智能二创、双平台同步自动化系统</b><br>
+  <i>All-in-One Automated Multi-Platform Video Downloader, Secondary Creation, Subtitle Burn-in, and Multi-Platform Publishing Engine</i>
 </p>
 
 <p align="center">
@@ -13,14 +13,25 @@
 
 ## 🌟 核心特性 (Features)
 
-### 1. 🚀 双平台自动上传发布 (Dual-Platform Auto Upload)
+### 1. 🌐 多平台视频源解析与下载 (Multi-Platform Video Ingestion)
+- **多平台无缝解析**：全面支持 **YouTube**、**Facebook (Watch / Reels / 剧集 / 短视频)**、**哔哩哔哩 (Bilibili / BV / 番剧)**、**Twitter / X**、**TikTok / 抖音国际版** 等主流多平台音视频链接。
+- **多链接与批量提交**：文本框支持多行 URL 批量录入，`POST /api/tasks` 会自动识别并拆分成多条独立处理任务。
+- **高弹性切片续传引擎**：内置深度加固的下载机制（`continuedl: True`、`retries: 20`、`fragment_retries: 30`），原生支持数小时长视频、超大剧集的分块断点续传，抵御长连接网络抖动。
+- **智能故障降级（Self-Healing Fallback）**：针对特定海外平台对代理节点的阻断（如 Facebook 握手返回 `SSL: UNEXPECTED_EOF_WHILE_READING`、502 错误等），系统自动触发直连重试平滑降级，保障任务不中断。
+
+### 2. 🚀 双平台自动上传发布 (Dual-Platform Auto Upload)
 - **多目标自由选择**：单次提交可选仅 Bilibili（`bilibili`）、仅 YouTube（`youtube`），或两者一起（`["bilibili", "youtube"]`）。首页勾选「哔哩哔哩 / YouTube 频道」即可，未传时回退到配置里的 `upload_targets`（默认 `["bilibili"]`）。
-- **多链接与播放列表**：文本框支持多行 URL。`POST /api/tasks` 会拆成多条独立任务。
 - **YouTube Data API v3**：OAuth 2.0、resumable upload（8MB 分片，单片失败重试 3 次）、缩略图、隐私状态（`public` / `unlisted` / `private`，默认 `unlisted`）以及分类 ID（下拉 + 手填，默认 `22`）。
 - **OAuth 回调**：`GET /oauth2callback` 落地页用授权 code 换 Refresh Token 并写入配置。授权范围是 `youtube.upload` 与 `youtube.readonly`。
 - **Bilibili 上传**：带 Cookie 直传。超过 8 小时（28800 秒）自动切分 P 并走多 P。成功后保存 BV 号，任务卡给出 `https://www.bilibili.com/video/{bvid}`。
 
-### 2. 🎨 视频智能二创引擎 (Secondary Creation Engine)
+### 3. 🛡️ 网络代理与 ProxyPool 深度对接 (Proxy & ProxyPool Integration)
+- **代理池自动对接**：原生集成自建 IP 代理池平台（如 `http://192.168.4.223:8088`），自动同步在线节点、出海隧道与节点延迟。
+- **灵活的代理策略**：支持全局默认、直连（不走代理）、轮换负载均衡隧道（`pool_tunnel`）、最低延迟节点（`pool_fastest`）及自定义外部代理（`custom`）。
+- **单任务独立指定**：新建任务支持单独指定代理策略或具体出口节点，满足跨区域、单站点隔离下载需求。
+- **状态看板与连通性测试**：首页常驻代理 Badge 展示当前出口 IP、测速 Ping 与节点名称；支持一键测速，即使全局关闭代理也能独立测试节点可用性。
+
+### 4. 🎨 视频智能二创引擎 (Secondary Creation Engine)
 二创与字幕烧录走 **同一条 FFmpeg `-vf` 滤镜链**，只压制一次：
 - **水平镜像 (`hflip`)**。
 - **黑边缩放**：边框比例 `0`–`0.20`（界面 0%–20%）。
@@ -29,19 +40,19 @@
 
 提交页有「视频二创增强处理」折叠面板；也可以在设置里保存默认值。任务卡会标出本条任务实际用了哪些二创。
 
-### 3. 🎙️ 智能字幕与语音识别 (Subtitles & Whisper STT)
+### 5. 🎙️ 智能字幕与语音识别 (Subtitles & Whisper STT)
 - 用视频语言判断是否中文。已有中文字幕时不烧录；其他语言下载字幕轨并译成简体中文 SRT。
 - 没有外挂字幕时，会用 ffprobe 看内嵌字幕并用 ffmpeg 抽出。
 - **Whisper**：没有可用字幕且开启了 Whisper 时，抽音频走兼容 OpenAI 的转写接口（默认模型 `whisper-1`），再切成 SRT。
 - 非中文 SRT 经 LLM 分块翻译。
 - **跳过字幕**：提交页或任务卡可打开 `skip_subtitles`，字幕识别和烧录都跳过，适合小机器直传。接口是 `POST /api/tasks/{task_id}/skip_subtitles`。
 
-### 4. 🤖 AI 标题与简介 (LLM Metadata)
+### 6. 🤖 AI 标题与简介 (LLM Metadata)
 - 任意 OpenAI 兼容接口（Base URL、模型名、API Key）。设置里可以拉模型列表（`POST /api/llm/models`）并试一次调用（`POST /api/llm/test`）。
 - 开启且 Key 有效时，用原标题和简介生成中文标题、长简介和标签。调用失败会重试，最多 3 次，然后回退原文。
-- 勾选了 LLM 但没填 Key，或根本没开启时，直接用 YouTube 原标题和简介。任务卡会标明这条简介是否来自 LLM。
+- 勾选了 LLM 但没填 Key，或根本没开启时，直接用视频原标题和简介。任务卡会标明这条简介是否来自 LLM。
 
-### 5. ☁️ CookieCloud 凭据同步 (CookieCloud)
+### 7. ☁️ CookieCloud 凭据同步 (CookieCloud)
 - 设置里填写服务器地址、UUID、密码后，可手动 `POST /api/cookiecloud/sync`。
 - **每条任务的流水线开头都会再同步一次**（已配置 URL、UUID、密码时），包括新建、**启动**（`POST /api/tasks/{task_id}/start`）和 **重试**（`POST /api/tasks/{task_id}/retry`）。同步到的 YouTube Netscape Cookie 与 Bilibili `SESSDATA` / `bili_jct` / `DedeUserID` 写回配置，再进入后面的阶段。`cookie_sync` 不能跳过。
 - 新建任务时，同步失败只记警告，流水线用当前已保存的 Cookie 继续。**启动和重试不一样**：CookieCloud 已配置但同步抛错时，任务停在 `cookie_sync`，后面的阶段不会跑，已经写入的 Cookie 保持上次成功的值。未配置 CookieCloud 时这一步直接跳过。
@@ -49,7 +60,7 @@
 - 同仓库的 [`cookiecloud-cloudflare/`](cookiecloud-cloudflare/README.md) 是一份可部署到 Cloudflare Workers / Pages 的 CookieCloud 服务端，用 KV 存加密 Cookie。
 - 敏感字段在设置接口里脱敏返回。`auto_delete_after_upload` 默认开启，发布成功后删除该任务的本地下载目录。
 
-### 6. 📊 主机资源条 (Host Resource Banner)
+### 8. 📊 主机资源条 (Host Resource Banner)
 登录后的首页，标题栏下面有一条粘性主机条。页面加载后立刻拉一次，约 1.5 秒后再拉一次（这样才有带宽差值），之后每 **15 秒** 轮询。
 
 数据来自需登录的 `GET /api/system/stats`（未登录返回 401）。采集失败返回 503，条上显示「更新失败」，并保留上一次成功的数字。
@@ -71,7 +82,7 @@
 
 `GET /api/system/stats` 的字段：`hostname`、`ip`、`country`、`cpu_percent`、`cpu_count`、`load_avg`、`memory`（`total` / `used` / `percent`）、`disk`（`total` / `used` / `percent` / `mount`）、`net`（`bytes_sent` / `bytes_recv`）、`uptime_seconds`、`sampled_at`。
 
-### 7. 📋 任务卡、断点续跑与复制链接 (Task Card, Resume & Copy Link)
+### 9. 📋 任务卡、断点续跑与复制链接 (Task Card, Resume & Copy Link)
 任务列表每 3 秒刷新。状态仍是 `PENDING`、`DOWNLOADING`、`SUBTITLE_PROCESSING`、`LLM_REGENERATION`、`UPLOADING`、`COMPLETED`、`FAILED`、`PAUSED`、`CANCELLED`。进度条仍是 0–100，同时每条任务记下 `current_stage`、`completed_stages` 和 `stage_artifacts`（保存在 `tasks.json`）。
 
 阶段顺序：
@@ -125,10 +136,11 @@ youtobi/
 │   ├── bilibili.py             # Bilibili 上传与超过 8 小时的分 P
 │   ├── cookiecloud.py          # CookieCloud 拉取与解密
 │   ├── llm.py                  # 标题 / 简介 / 字幕翻译
+│   ├── proxy_pool.py           # 自建 ProxyPool 对接、延迟测试与多策略代理路由
 │   ├── subtitle.py             # SRT、内嵌字幕、Whisper
 │   ├── task_manager.py         # 分阶段流水线、断点续跑与 tasks.json
 │   ├── video_editor.py         # FFmpeg 单次 -vf：镜像、黑边、水印、烧录
-│   ├── youtube.py              # yt-dlp 元数据、下载、多 URL / 播放列表拆分
+│   ├── youtube.py              # yt-dlp 元数据、下载、多 URL / 播放列表拆分与断点续传
 │   └── youtube_uploader.py     # YouTube Data API v3 OAuth 与 resumable upload
 ├── static/
 │   ├── css/style.css           # 暗色玻璃拟态样式，含主机条
@@ -239,6 +251,8 @@ python3 app.py
 | `POST` | `/api/youtube/oauth-callback` | 用 code 换 Token |
 | `GET` | `/oauth2callback` | Google 重定向落地页（匿名可访问） |
 | `POST` | `/api/youtube/test` | 测试 YouTube 频道 |
+| `GET` | `/api/proxy/status` | 获取代理池连通性、当前配置、节点列表与出口 IP |
+| `POST` | `/api/proxy/test` | 测试指定或当前配置的代理节点延迟与连通性 |
 
 ---
 
@@ -311,7 +325,7 @@ OAuth 重定向 URI 要和浏览器实际访问的域名一致。
 
 ## 🧪 测试 (Testing)
 
-`tests/test_youtobi.py` 里有 **31** 个 `unittest` 测试方法，覆盖配置、登录、主机统计（含未登录 401、公网 IP 回退与缓存）、任务生命周期、分阶段续跑与 CookieCloud 失败中止、字幕 / Whisper、B 站分 P、CookieCloud 解密、LLM、FFmpeg 滤镜、YouTube OAuth 与双平台编排。
+`tests/test_youtobi.py` 里有 **48** 个自动化测试方法，覆盖配置、登录、主机统计（含未登录 401、公网 IP 回退与缓存）、任务生命周期、分阶段续跑与 CookieCloud 失败中止、字幕 / Whisper、B 站分 P、CookieCloud 解密、LLM、FFmpeg 滤镜、YouTube OAuth 与双平台编排、多平台链接解析、ProxyPool 代理池交互、状态展示与节点连通性测试。
 
 ```bash
 PYTHONPATH=. python -m unittest tests.test_youtobi
